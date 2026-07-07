@@ -6,8 +6,8 @@ import (
 	"net"
 	"os"
 
-	"github.com/things-go/go-socks5"
 	"github.com/pelletier/go-toml/v2"
+	"github.com/things-go/go-socks5"
 )
 
 type Config struct {
@@ -17,8 +17,7 @@ type Config struct {
 	} `toml:"socks5"`
 }
 
-type LoggingRule struct{
-
+type LoggingRule struct {
 }
 
 func main() {

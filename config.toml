@@ -1,0 +1,18 @@
+# 这是本项目的示例配置文件
+[socks5]
+listen="0.0.0.0"
+port=2080
+
+[peer]
+server="1.1.1.1"
+port=443
+link_port=80
+key="93cb499ed398baa3f36f76c20483989ec911f8fe5ccd43a3c5f58952ade56435"
+sni="example.com"
+
+[server]
+listen="0.0.0.0"
+port=443
+link_port=80
+key="93cb499ed398baa3f36f76c20483989ec911f8fe5ccd43a3c5f58952ade56435"
+sni="example.com"
