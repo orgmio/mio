@@ -51,7 +51,7 @@ openssl rand -hex 32
 # 📄 帮助和项目文档
 请直接参阅该项目的config.toml文件 里面包含了该项目所有能支持的字段
 # ⚖️ 条款与授权
-该项目以GNU AFFERO GENERAL PUBLIC LICENSE v3授权
+该项目以GNU AFFERO GENERAL PUBLIC LICENSE v3授权 详细参见LICENSE
 
 如果您希望二次开发，也可以自由指定一个更高版本
 
