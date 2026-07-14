@@ -1,0 +1,10 @@
+local.867678.xyz:443 {
+    tls internal
+    reverse_proxy https://www.baidu.com {
+        header_up Host {upstream_host_header}
+        transport http {
+            tls
+            tls_server_name www.baidu.com
+        }
+    }
+}

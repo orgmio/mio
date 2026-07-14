@@ -8,6 +8,19 @@
 
 该仓库只是一个最简实现 以验证协议可行性
 # 🏃 协议行为
+协议服务端行为旨在1：1模拟caddy-real文件夹下存在的caddyfile
+
+客户端行为旨在模拟ArchLinux源`extra`中带的Brave浏览器的无痕模式
+
+wireshark抓包结果也位于那里
+
+- **way-brave-caddy.pcapng**:brave访问一个空白的caddy的行为
+- **way-brave-caddy-baidu.pcapng**:brave访问一个反代了百度的caddy的行为
+
+下方为测试时hosts文件中的不同 需注意local.867678.xyz没有真正的权威指向 这是我用来测试的
+```
+local.867678.xyz 127.0.0.1
+```
 > 一般情况下
 
 | 客户端 | 服务端 |
