@@ -40,7 +40,7 @@ jobs:
         id: get_version
         shell: bash
         run: |
-          echo "version=$(grep 'const Version' cmd/version.go | cut -d'"' -f2)" >> $GITHUB_OUTPUT
+          echo "version=$(grep 'const Version' command/version.go | cut -d'"' -f2)" >> $GITHUB_OUTPUT
           mv go.mod go.mod.backup
 
       - name: Set up Go
@@ -61,7 +61,7 @@ jobs:
           tag_name: V${{ steps.get_version.outputs.version }}
           files: ixa-go*
           body: |
-            # 📝 Release Notes
+            # 📝 Release Note
             Fixes and improvements
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

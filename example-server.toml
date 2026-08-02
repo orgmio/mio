@@ -1,7 +1,7 @@
 # 这是本项目的示例配置文件
 # 监听80/http,443/https,quic
 [server]
-listen = "127.0.0.1"
+listen = "0.0.0.0"
 http_port = 80
 https_port = 443
 key = "93cb499ed398baa3f36f76c20483989ec911f8fe5ccd43a3c5f58952ade56435"
