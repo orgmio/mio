@@ -1,4 +1,4 @@
-# 这是本项目的示例配置文件
+# 这是本项目的客户端示例配置文件
 # 行为：开启一个监听任何IP到代理服务器的2080端口的socks
 # 与对端叫做1.1.1.1的服务器的80/http,443/https,quic端口通信
 [socks5]
@@ -7,7 +7,6 @@ port = 2080
 
 [peer]
 server = "1.1.1.1"
-http_port = 80
-https_port = 443
-key = "93cb499ed398baa3f36f76c20483989ec911f8fe5ccd43a3c5f58952ade56435"
-sni = "example.com"
+port = 443
+key = "e85bef458ce6a7fe1fe89fc4a2d12e7550bebede578fb54a6c829b267cd7583b"
+sni = "https://example.com:443"

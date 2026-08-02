@@ -12,6 +12,37 @@
 
 该仓库只是一个最简实现 以验证协议可行性
 
+# 📚 项目文档
+
+请直接参阅该项目的example.toml文件 里面包含了该项目所有能支持的字段
+
+## 🧪 如何起飞
+
+当前 POC 用 TLS 1.3 和 HMAC-SHA256 验证以下最小链路：
+
+先启动服务端：
+
+```bash
+./ixa-go -c example-server.toml
+```
+
+再启动客户端：
+
+```bash
+./ixa-go -c example-client.toml
+curl --socks5-hostname 127.0.0.1:2080 https://example.com
+```
+
+此阶段只验证加密、认证、目标封装和双向转发。
+
+目前已实现ClientHello.Random与ServerHello.Random双向隐藏HMAC认证，以及认证失败时回落到sni对应的真实站点。
+
+临时证书不会被客户端验证，尚未实现QUIC、真实证书、Caddy本地回落和 Brave 指纹模拟，不应用于生产环境。
+
+## 📄 配置文件
+
+`sni`字段必须是一个HTTPS URL，因为需要偷他的证书(没错这就是类Reality);端口可以任意。
+
 # 🏃 协议行为
 
 协议行为旨在模拟`caddy-real/`下存在的wireshark抓包文件
@@ -48,7 +79,8 @@ local.867678.xyz 127.0.0.1
 | 迟迟没有回应       | 超时后关闭连接并重新尝试 |
 
 > 数据外表
-> 应当看起来像是一个brave在访问Caddy（TLS）
+
+应当看起来像是一个brave在访问Caddy（TLS）
 
 需要做到：
 
@@ -56,13 +88,11 @@ local.867678.xyz 127.0.0.1
 应用 → SOCKS5 → ixa 客户端 → TLS 隧道 → ixa 服务端 → 目标网站
 ```
 
-客户端通过配置文件中的`http_port`（建议设置为80）请求 并由服务端重定向到`https_port`
+首先尝试HTTP/1.1 TLS握手中服务端将校验TLSClientHello中的HMAC是否为设置的密码
 
-此时首先尝试HTTP/1.1 TLS握手中服务端将校验TLSClientHello中的HMAC是否为设置的密码
+如果是，在建立TCP连接之后开始尝试建立QUIC隧道;QUIC成功之后按照标准QUIC的方式传输;如果不成功按照HTTP/1.1或2的方式传输
 
-如果是，在建立TCP连接之后开始尝试建立QUIC隧道;QUIC成功之后按照类似BBR流控的Hysteria2的方式传输;如果不成功按照Reality类似的方式传输
-
-如果不是，直接返回伪装域名的内容，超牛逼！
+如果不是，直接返回伪装域名的内容。
 
 ## ⚠️ 安全性警告
 
@@ -82,31 +112,6 @@ openssl rand -hex 32
 | 16 | 刚达到不那么容易破解的临界点 |
 | 32 | 现代暴力破解工具一般没辙 |
 | 64 | 刚好卡在HMAC的临界点 超过就会被SHA256压缩成32字节 没意义 |
-
-# 📄 帮助和项目文档
-
-请直接参阅该项目的example.toml文件 里面包含了该项目所有能支持的字段
-
-## 🧪 实验
-
-当前 POC 用 TLS 1.3 和 HMAC-SHA256 验证以下最小链路：
-
-先启动服务端：
-
-```bash
-./ixa-go -config example-server.toml
-```
-
-再启动客户端：
-
-```bash
-./ixa-go -config example-client.toml
-curl --socks5-hostname 127.0.0.1:2080 https://example.com
-```
-
-此阶段只验证加密、认证、目标封装和双向转发。
-
-临时证书不会被客户端验证，尚未实现QUIC、真实证书、ClientHello.Random 藏 key、Caddy 回落和 Brave 指纹模拟，不应用于生产环境。
 
 # ⚖️ 条款与授权
 

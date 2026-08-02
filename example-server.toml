@@ -1,8 +1,7 @@
-# 这是本项目的示例配置文件
+# 这是本项目的服务端示例配置文件
 # 监听80/http,443/https,quic
 [server]
 listen = "0.0.0.0"
-http_port = 80
-https_port = 443
-key = "93cb499ed398baa3f36f76c20483989ec911f8fe5ccd43a3c5f58952ade56435"
-sni = "example.com"
+port = 443
+key = "e85bef458ce6a7fe1fe89fc4a2d12e7550bebede578fb54a6c829b267cd7583b"
+sni = "https://example.com:443"

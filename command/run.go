@@ -17,20 +17,28 @@ func Run(args []string) error {
 		return nil
 	}
 
-	mode := "client"
+	explicitMode := ""
 	if len(args) > 0 && (args[0] == "client" || args[0] == "server") {
-		mode = args[0]
+		explicitMode = args[0]
 		args = args[1:]
 	}
-	flags := flag.NewFlagSet("ixa-go "+mode, flag.ContinueOnError)
-	configPath := flags.String("config", "example.toml", "path to the TOML configuration file")
+	flags := flag.NewFlagSet("ixa-go", flag.ContinueOnError)
+	configPath := "example.toml"
+	flags.StringVar(&configPath, "c", configPath, "path to the TOML configuration file")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
 
-	cfg, err := LoadConfig(*configPath)
+	cfg, err := LoadConfig(configPath)
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
+	}
+	mode, err := cfg.Mode()
+	if err != nil {
+		return err
+	}
+	if explicitMode != "" && explicitMode != mode {
+		return fmt.Errorf("%s command cannot use a %s configuration", explicitMode, mode)
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)

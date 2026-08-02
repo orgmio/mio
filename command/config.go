@@ -14,6 +14,21 @@ type Config struct {
 	Server protocal.TunnelServerConfig `toml:"server"`
 }
 
+func (c Config) Mode() (string, error) {
+	hasPeer := c.Peer.Server != "" || c.Peer.Port != 0 || c.Peer.Key != "" || c.Peer.SNI != ""
+	hasServer := c.Server.Listen != "" || c.Server.Port != 0 || c.Server.Key != "" || c.Server.SNI != ""
+	switch {
+	case hasPeer && hasServer:
+		return "", fmt.Errorf("peer and server cannot exist in the same configuration")
+	case hasServer:
+		return "server", nil
+	case hasPeer:
+		return "client", nil
+	default:
+		return "", fmt.Errorf("configuration must contain either peer or server")
+	}
+}
+
 func LoadConfig(path string) (Config, error) {
 	var cfg Config
 	data, err := os.ReadFile(path)
