@@ -1,0 +1,67 @@
+name: Just fly,don't worry(Do you worry?Do you worry?)
+
+on:
+  push:
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  build:
+    name: Build for ${{ matrix.dickname }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - tag: "GOAMD64=v4"
+            dickname: "linux-amd64v4-glibc"
+          - tag: "GOAMD64=v3"
+            dickname: "linux-amd64v3-glibc"
+          - tag: "GOAMD64=v2"
+            dickname: "linux-amd64v2-glibc"
+          - tag: "GOAMD64=v1"
+            dickname: "linux-amd64v1-glibc"
+          - tag: ""
+            dickname: "linux-amd64-glibc"
+          - tag: "CGO_ENABLED=0"
+            dickname: "linux-amd64-musl"
+          - tag: "GOARCH=arm64"
+            dickname: "linux-arm64-musl"
+          - tag: "GOOS=darwin GOARCH=arm64"
+            dickname: "darwin-arm64"
+          - tag: "GOOS=windows GOARCH=amd64"
+            dickname: "windows-amd64.exe"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@main
+
+      - name: Get version
+        id: get_version
+        shell: bash
+        run: |
+          echo "version=$(grep 'const Version' cmd/version.go | cut -d'"' -f2)" >> $GITHUB_OUTPUT
+          mv go.mod go.mod.backup
+
+      - name: Set up Go
+        uses: actions/setup-go@main
+        with:
+          go-version: 'stable'
+
+      - name: Build!
+        shell: bash
+        run: |
+          mv go.mod.backup go.mod
+          ${{ matrix.tag }} go build
+          mv ixa-go* ixa-go-${{ matrix.dickname }}
+
+      - name: Release
+        uses: softprops/action-gh-release@master
+        with:
+          tag_name: V${{ steps.get_version.outputs.version }}
+          files: ixa-go*
+          body: |
+            # 📝 Release Notes
+            Fixes and improvements
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -1,9 +1,14 @@
 package main
 
 import (
-	"fmt"
+	"log"
+	"os"
+
+	"github.com/moaeiou/ixa-go/command"
 )
 
 func main() {
-	fmt.Printf("Comming soon\n")
+	if err := command.Run(os.Args[1:]); err != nil {
+		log.Fatal(err)
+	}
 }

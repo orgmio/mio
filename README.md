@@ -1,72 +1,117 @@
 # ixa-go
+
 一个简易的跨平台、强伪装、高性能代理协议实现
 
 # 🚀 项目特点
+
 旨在模拟一个chrome浏览器访问一个caddy反代网站
 
-相比Reality 他支持QUIC 相比Hysteria2 他支持回退HTTP/1.1
+跟Reality相比 此项目弥补了他不支持QUIC协议传输代理的缺点
+
+跟Hysteria相比 此项目弥补了他在遇到UDP不通时无所事事直接连不上的缺点
 
 该仓库只是一个最简实现 以验证协议可行性
+
 # 🏃 协议行为
-协议服务端行为旨在1：1模拟caddy-real文件夹下存在的caddyfile
 
-客户端行为旨在模拟ArchLinux源`extra`中带的Brave浏览器的无痕模式
-
-wireshark抓包结果也位于那里
+协议行为旨在模拟`caddy-real/`下存在的wireshark抓包文件
 
 - **way-brave-caddy.pcapng**:brave访问一个空白的caddy的行为
-- **way-brave-caddy-baidu.pcapng**:brave访问一个反代了百度的caddy的行为
+- **way-brave-caddy-baidu.pcapng**:brave访问一个反代了百度的caddy的行为 配置文件在Caddyfile
+
+这个文件夹下是由wireshark抓包的真实brave访问真实caddy的行为
+
+客户端行为旨在模拟ArchLinux源`extra`中带的`Brave`浏览器的无痕模式
+
+只要在公网传输的数据包与wireshark抓到的真实行为无异此项目就算成功
 
 下方为测试时hosts文件中的不同 需注意local.867678.xyz没有真正的权威指向 这是我用来测试的
-```
+
+```ini
 local.867678.xyz 127.0.0.1
 ```
+
 > 一般情况下
 
-| 客户端 | 服务端 |
-|  ----  | ----  |
-| 发送HTTP请求至服务端的80端口 | 踹到443并返回我支持QUIC |
-| 尝试用HTTP/1.1+TLS1.3+X25519MLKEM768连接 | 先返回一点虚假数据 |
-| 尝试用HTTP/3+TLS1.3+X25519MLKEM768连接 | 准备接收QUIC |
-| QUIC建立成功 | 交换密钥并开始传输加密数据 |
+| 客户端                                   | 服务端                                   |
+| ---------------------------------------- | ---------------------------------------- |
+| 尝试用HTTP/1.1+TLS1.3+X25519MLKEM768连接 | 先返回一点虚假数据并告诉客户端我支持QUIC |
+| 尝试用HTTP/3+TLS1.3+X25519MLKEM768连接   | 准备接收QUIC                             |
+| QUIC建立成功                             | 交换密钥并开始传输加密数据               |
 
 > 失败处理
 
-| 客户端 | 服务端 |
-|  ----  | ----  |
-| 客户端尝试QUIC失败 | 退回HTTP/1.1 |
-| 证书验证错误 | 立刻切断连接 |
-| 迟迟没有回应 | 超时后关闭连接并重新尝试 |
+| 客户端             | 服务端                   |
+| ------------------ | ------------------------ |
+| 客户端尝试QUIC失败 | 退回HTTP/1.1             |
+| 证书验证错误       | 立刻切断连接             |
+| 迟迟没有回应       | 超时后关闭连接并重新尝试 |
 
 > 数据外表
+> 应当看起来像是一个brave在访问Caddy（TLS）
+
+需要做到：
+
 ```
-80端口 明文跳转 → 443端口TCP: ClientHello.Random藏key，
-不匹配转发真实sni，匹配则接管走TLS隧道
-443端口UDP: QUIC隧道
-对于TLS in TLS问题 计划以vision流控的方式实现
+应用 → SOCKS5 → ixa 客户端 → TLS 隧道 → ixa 服务端 → 目标网站
 ```
+
+客户端通过配置文件中的`http_port`（建议设置为80）请求 并由服务端重定向到`https_port`
+
+此时首先尝试HTTP/1.1 TLS握手中服务端将校验TLSClientHello中的HMAC是否为设置的密码
+
+如果是，在建立TCP连接之后开始尝试建立QUIC隧道;QUIC成功之后按照类似BBR流控的Hysteria2的方式传输;如果不成功按照Reality类似的方式传输
+
+如果不是，直接返回伪装域名的内容，超牛逼！
+
 ## ⚠️ 安全性警告
+
 为了配置的方便ixa协议并不像reality那样需要一个PublicKey和一个ShortId
 
 所以key字段必须是用密码学工具生成的无关联字符
 
 下列是一个推荐的示例用openssl生成符合要求的密码
-```
+
+```bash
 openssl rand -hex 32
 ```
+
 这里以HMAC（RFC2104）的规范为例
 | 长度 单位：字节 | 安全性 |
-|  ----  | ----  |
+| ---- | ---- |
 | 16 | 刚达到不那么容易破解的临界点 |
 | 32 | 现代暴力破解工具一般没辙 |
 | 64 | 刚好卡在HMAC的临界点 超过就会被SHA256压缩成32字节 没意义 |
 
 # 📄 帮助和项目文档
+
 请直接参阅该项目的example.toml文件 里面包含了该项目所有能支持的字段
 
+## 🧪 实验
+
+当前 POC 用 TLS 1.3 和 HMAC-SHA256 验证以下最小链路：
+
+先启动服务端：
+
+```bash
+./ixa-go -config example-server.toml
+```
+
+再启动客户端：
+
+```bash
+./ixa-go -config example-client.toml
+curl --socks5-hostname 127.0.0.1:2080 https://example.com
+```
+
+此阶段只验证加密、认证、目标封装和双向转发。
+
+临时证书不会被客户端验证，尚未实现QUIC、真实证书、ClientHello.Random 藏 key、Caddy 回落和 Brave 指纹模拟，不应用于生产环境。
+
 # ⚖️ 条款与授权
+
 该项目以GNU AFFERO GENERAL PUBLIC LICENSE v3授权 详细参见LICENSE
 
-如果您希望二次开发，也可以自由指定一个更高版本
+如果您希望二次开发，也可以指定一个更高版本
 
-如果您希望将其集成到诸如Sing-box、xray等内核中，可以保持为GPL-v3或其他
+如果您希望将其集成到诸如Sing-box、xray等内核中，可以修改为GPL-v3或其他

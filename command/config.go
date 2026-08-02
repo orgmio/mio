@@ -1,0 +1,70 @@
+package command
+
+import (
+	"fmt"
+	"os"
+
+	"github.com/BurntSushi/toml"
+	"github.com/moaeiou/ixa-go/protocal"
+)
+
+type Config struct {
+	SOCKS5 protocal.SOCKS5Config       `toml:"socks5"`
+	Peer   protocal.PeerConfig         `toml:"peer"`
+	Server protocal.TunnelServerConfig `toml:"server"`
+}
+
+func LoadConfig(path string) (Config, error) {
+	var cfg Config
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return cfg, err
+	}
+	meta, err := toml.Decode(string(data), &cfg)
+	if err != nil {
+		return cfg, err
+	}
+	if undecoded := meta.Undecoded(); len(undecoded) != 0 {
+		return cfg, fmt.Errorf("unknown configuration field %q", undecoded[0])
+	}
+	return cfg, nil
+}
+
+func (c Config) ValidateClient() error {
+	if c.SOCKS5.Listen == "" {
+		return fmt.Errorf("socks5.listen must not be empty")
+	}
+	if err := validPort("socks5.port", c.SOCKS5.Port); err != nil {
+		return err
+	}
+	if c.Peer.Server == "" {
+		return fmt.Errorf("peer.server must not be empty")
+	}
+	if err := validPort("peer.port", c.Peer.Port); err != nil {
+		return err
+	}
+	if c.Peer.SNI == "" {
+		return fmt.Errorf("peer.sni must not be empty")
+	}
+	return nil
+}
+
+func (c Config) ValidateServer() error {
+	if c.Server.Listen == "" {
+		return fmt.Errorf("server.listen must not be empty")
+	}
+	if err := validPort("server.port", c.Server.Port); err != nil {
+		return err
+	}
+	if c.Server.SNI == "" {
+		return fmt.Errorf("server.sni must not be empty")
+	}
+	return nil
+}
+
+func validPort(name string, port int) error {
+	if port < 1 || port > 65535 {
+		return fmt.Errorf("%s must be between 1 and 65535", name)
+	}
+	return nil
+}
