@@ -59,7 +59,7 @@ jobs:
         uses: softprops/action-gh-release@master
         with:
           tag_name: V${{ steps.get_version.outputs.version }}
-          files: ixa-go*
+          files: ixa-go-${{ matrix.dickname }}
           body: |
             # 📝 Release Note
             Fixes and improvements
