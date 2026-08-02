@@ -3,13 +3,16 @@ package protocal
 import (
 	"bytes"
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/rand"
-	"crypto/tls"
 	"io"
 	"net"
 	"strings"
 	"testing"
 	"time"
+
+	tlsfork "github.com/refraction-networking/utls"
 )
 
 func TestTunnelRequestRoundTrip(t *testing.T) {
@@ -34,6 +37,14 @@ func TestTLSAuthenticatedTunnelAndRelay(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Deliberately sign CertificateVerify with a key that does not match the
+	// certificate. The ixa TLS fork accepts it only because peer identity is
+	// verified by the ServerHello HMAC below.
+	mismatchedKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server.tlsConfig.Certificates[0].PrivateKey = mismatchedKey
 	upstream, echo := net.Pipe()
 	server.dialContext = func(_ context.Context, network, address string) (net.Conn, error) {
 		if network != "tcp" || address != "example.com:443" {
@@ -57,12 +68,13 @@ func TestTLSAuthenticatedTunnelAndRelay(t *testing.T) {
 		t.Fatal(err)
 	}
 	observed := &serverHelloObserverConn{Conn: clientRaw}
-	client := tls.Client(observed, &tls.Config{
-		MinVersion:         tls.VersionTLS13,
-		ServerName:         "example.com",
-		InsecureSkipVerify: true,
-		NextProtos:         []string{"http/1.1"},
-		Rand:               io.MultiReader(bytes.NewReader(authRandom), rand.Reader),
+	client := tlsfork.Client(observed, &tlsfork.Config{
+		MinVersion:                    tlsfork.VersionTLS13,
+		ServerName:                    "example.com",
+		InsecureSkipVerify:            true,
+		InsecureSkipCertificateVerify: true,
+		NextProtos:                    []string{"http/1.1"},
+		Rand:                          io.MultiReader(bytes.NewReader(authRandom), rand.Reader),
 	})
 	defer client.Close()
 	_ = client.SetDeadline(time.Now().Add(3 * time.Second))

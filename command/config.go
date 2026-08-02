@@ -1,11 +1,12 @@
 package command
 
 import (
+	"errors"
 	"fmt"
 	"os"
 
-	"github.com/BurntSushi/toml"
 	"github.com/moaeiou/ixa-go/protocal"
+	"github.com/pelletier/go-toml/v2"
 )
 
 type Config struct {
@@ -31,16 +32,18 @@ func (c Config) Mode() (string, error) {
 
 func LoadConfig(path string) (Config, error) {
 	var cfg Config
-	data, err := os.ReadFile(path)
+	file, err := os.Open(path)
 	if err != nil {
 		return cfg, err
 	}
-	meta, err := toml.Decode(string(data), &cfg)
-	if err != nil {
+	defer file.Close()
+	decoder := toml.NewDecoder(file).DisallowUnknownFields()
+	if err := decoder.Decode(&cfg); err != nil {
+		var strictError *toml.StrictMissingError
+		if errors.As(err, &strictError) {
+			return cfg, fmt.Errorf("unknown configuration field:\n%s", strictError.String())
+		}
 		return cfg, err
-	}
-	if undecoded := meta.Undecoded(); len(undecoded) != 0 {
-		return cfg, fmt.Errorf("unknown configuration field %q", undecoded[0])
 	}
 	return cfg, nil
 }

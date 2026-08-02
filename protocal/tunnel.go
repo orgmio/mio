@@ -24,6 +24,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	tlsfork "github.com/refraction-networking/utls"
 )
 
 const (
@@ -101,12 +103,13 @@ func (c *TunnelClient) DialContext(ctx context.Context, network, target string) 
 		return nil, fmt.Errorf("create ClientHello authentication: %w", err)
 	}
 	observed := &serverHelloObserverConn{Conn: raw}
-	tlsConn := tls.Client(observed, &tls.Config{
-		MinVersion:         tls.VersionTLS13,
-		ServerName:         c.cover.host,
-		InsecureSkipVerify: true, // POC: the ephemeral server certificate cannot be verified.
-		NextProtos:         []string{"http/1.1"},
-		Rand:               io.MultiReader(bytes.NewReader(authRandom), rand.Reader),
+	tlsConn := tlsfork.Client(observed, &tlsfork.Config{
+		MinVersion:                    tlsfork.VersionTLS13,
+		ServerName:                    c.cover.host,
+		InsecureSkipVerify:            true,
+		InsecureSkipCertificateVerify: true,
+		NextProtos:                    []string{"http/1.1"},
+		Rand:                          io.MultiReader(bytes.NewReader(authRandom), rand.Reader),
 	})
 	deadline, ok := ctx.Deadline()
 	if !ok {
