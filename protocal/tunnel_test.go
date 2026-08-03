@@ -35,6 +35,124 @@ func TestTunnelRequestRoundTrip(t *testing.T) {
 	}
 }
 
+func TestClientHelloParserPreservesPartialInput(t *testing.T) {
+	inputs := [][]byte{
+		[]byte("abc"),
+		{22, 3, 3, 0, 10, 1, 2, 3},
+	}
+	for _, input := range inputs {
+		preface, _, err := readClientHelloRandom(bytes.NewReader(input))
+		if err == nil {
+			t.Fatalf("input %x unexpectedly parsed", input)
+		}
+		if !bytes.Equal(preface, input) {
+			t.Fatalf("preface = %x, want %x", preface, input)
+		}
+	}
+}
+
+func TestFallbackForwardsBytesUnchanged(t *testing.T) {
+	certificate, err := ephemeralCertificate("example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server, err := newTunnelServer(
+		TunnelServerConfig{Key: "93cb499ed398baa3f36f76c20483989ec911f8fe5ccd43a3c5f58952ade56435", SNI: "https://example.com:443"},
+		func(cover coverTarget) (tls.Certificate, error) { return certificate, nil },
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	upstream, peer := net.Pipe()
+	server.dialContext = func(_ context.Context, network, address string) (net.Conn, error) {
+		if network != "tcp" || address != "example.com:443" {
+			t.Fatalf("unexpected fallback dial %s %s", network, address)
+		}
+		return upstream, nil
+	}
+	go func() {
+		defer peer.Close()
+		_, _ = io.Copy(peer, peer)
+	}()
+	client, inbound := net.Pipe()
+	done := make(chan error, 1)
+	go func() { done <- server.serveRaw(context.Background(), inbound) }()
+	payload := []byte("plain bytes that are not TLS")
+	if _, err := client.Write(payload); err != nil {
+		t.Fatal(err)
+	}
+	got := make([]byte, len(payload))
+	if _, err := io.ReadFull(client, got); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, payload) {
+		t.Fatalf("fallback changed bytes: got %x want %x", got, payload)
+	}
+	_ = client.Close()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestUDPFallbackForwardsDatagramsUnchanged(t *testing.T) {
+	certificate, err := ephemeralCertificate("example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server, err := newTunnelServer(
+		TunnelServerConfig{Key: "93cb499ed398baa3f36f76c20483989ec911f8fe5ccd43a3c5f58952ade56435", SNI: "https://example.com:443"},
+		func(cover coverTarget) (tls.Certificate, error) { return certificate, nil },
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	upstream, peer := net.Pipe()
+	server.dialContext = func(_ context.Context, network, address string) (net.Conn, error) {
+		if network != "udp" || address != "example.com:443" {
+			t.Fatalf("unexpected UDP fallback dial %s %s", network, address)
+		}
+		return upstream, nil
+	}
+	writes := make(chan udpWrite, 1)
+	writer := udpCaptureWriter{writes: writes}
+	client := &net.UDPAddr{IP: net.ParseIP("192.0.2.10"), Port: 45678}
+	payload := []byte("QUIC datagram")
+	go func() {
+		got := make([]byte, len(payload))
+		_, _ = io.ReadFull(peer, got)
+		if !bytes.Equal(got, payload) {
+			t.Errorf("upstream payload = %x, want %x", got, payload)
+		}
+		_, _ = peer.Write([]byte("QUIC response"))
+	}()
+	if err := server.forwardUDPDatagram(context.Background(), writer, client, payload); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case got := <-writes:
+		if string(got.payload) != "QUIC response" || got.address.String() != client.String() {
+			t.Fatalf("UDP response = %q to %s", got.payload, got.address)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("UDP fallback response timed out")
+	}
+	server.closeUDPSessions()
+}
+
+type udpWrite struct {
+	payload []byte
+	address *net.UDPAddr
+}
+
+type udpCaptureWriter struct {
+	writes chan udpWrite
+}
+
+func (w udpCaptureWriter) WriteToUDP(payload []byte, address *net.UDPAddr) (int, error) {
+	w.writes <- udpWrite{payload: append([]byte(nil), payload...), address: cloneUDPAddr(address)}
+	return len(payload), nil
+}
+
 func TestUDPExchangePreservesDatagram(t *testing.T) {
 	tunnelClient, tunnelServer := net.Pipe()
 	upstreamServer, upstreamPeer := net.Pipe()

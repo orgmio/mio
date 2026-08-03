@@ -52,7 +52,7 @@ func Run(args []string) error {
 		if err != nil {
 			return fmt.Errorf("create ixa server: %w", err)
 		}
-		log.Printf("ixa POC server listening on %s (TCP/TLS 1.3)", cfg.Server.Address())
+		log.Printf("ixa POC server listening on %s (TCP/TLS 1.3 + UDP fallback)", cfg.Server.Address())
 		if err := server.ListenAndServe(ctx); err != nil {
 			return fmt.Errorf("serve ixa tunnel: %w", err)
 		}

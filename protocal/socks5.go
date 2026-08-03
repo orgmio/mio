@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"log"
 	"net"
 	"strconv"
 	"sync"
@@ -30,6 +31,7 @@ type SOCKS5Server struct {
 
 func NewSOCKS5ServerWithTransport(config SOCKS5Config, dialContext func(context.Context, string, string) (net.Conn, error), udpExchange UDPExchangeFunc) *SOCKS5Server {
 	server := socks5.NewServer(
+		socks5.WithLogger(socks5.NewLogger(log.Default())),
 		socks5.WithResolver(remoteResolver{}),
 		socks5.WithDial(func(ctx context.Context, network, address string) (net.Conn, error) {
 			if network == "udp" {

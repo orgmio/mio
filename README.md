@@ -37,6 +37,8 @@ curl --socks5-hostname 127.0.0.1:2080 https://example.com
 
 目前已实现ClientHello.Random与ServerHello.Random双向隐藏HMAC认证，以及认证失败时回落到sni对应的真实站点。
 
+服务端会在同一个端口监听TCP和UDP：TCP认证失败时原样转发到sni，UDP流量则按客户端会话原样转发到sni以兼容QUIC/HTTP3探测。
+
 SOCKS5目前支持TCP CONNECT和UDP ASSOCIATE，UDP在POC阶段以每个数据报建立一次短TLS隧道的方式传输。
 
 服务端启动时会验证并缓存sni站点的真实证书链，客户端通过反向HMAC验证服务端。

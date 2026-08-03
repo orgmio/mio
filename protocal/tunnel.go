@@ -186,6 +186,8 @@ type TunnelServer struct {
 	dialContext func(context.Context, string, string) (net.Conn, error)
 	mu          sync.Mutex
 	clients     map[net.Conn]struct{}
+	udpMu       sync.Mutex
+	udpSessions map[string]*udpForwardSession
 }
 
 func NewTunnelServer(config TunnelServerConfig) (*TunnelServer, error) {
@@ -218,6 +220,7 @@ func newTunnelServer(config TunnelServerConfig, loadCertificate func(coverTarget
 		},
 		dialContext: dialer.DialContext,
 		clients:     make(map[net.Conn]struct{}),
+		udpSessions: make(map[string]*udpForwardSession),
 	}, nil
 }
 
@@ -276,16 +279,42 @@ func (s *TunnelServer) ListenAndServe(ctx context.Context) error {
 		return err
 	}
 	defer listener.Close()
+	udpAddress, err := net.ResolveUDPAddr("udp", s.config.Address())
+	if err != nil {
+		return err
+	}
+	udpListener, err := net.ListenUDP("udp", udpAddress)
+	if err != nil {
+		return fmt.Errorf("listen UDP: %w", err)
+	}
+	defer udpListener.Close()
+	udpErrors := make(chan error, 1)
+	go func() {
+		udpErr := s.serveUDPForwarder(ctx, udpListener)
+		udpErrors <- udpErr
+		if udpErr != nil {
+			_ = listener.Close()
+		}
+	}()
 	go func() {
 		<-ctx.Done()
 		_ = listener.Close()
+		_ = udpListener.Close()
 		s.closeClients()
+		s.closeUDPSessions()
 	}()
 	for {
 		raw, err := listener.Accept()
 		if err != nil {
 			if ctx.Err() != nil {
 				return nil
+			}
+			select {
+			case udpErr := <-udpErrors:
+				if udpErr != nil {
+					return fmt.Errorf("serve UDP fallback: %w", udpErr)
+				}
+			default:
 			}
 			return err
 		}
@@ -319,9 +348,8 @@ func (s *TunnelServer) serveRaw(ctx context.Context, raw net.Conn) error {
 }
 
 func (s *TunnelServer) fallback(ctx context.Context, client net.Conn, preface []byte) error {
-	dialer := &net.Dialer{Timeout: tunnelDialTimeout, KeepAlive: 30 * time.Second}
 	target := s.cover.address
-	upstream, err := dialer.DialContext(ctx, "tcp", target)
+	upstream, err := s.dialContext(ctx, "tcp", target)
 	if err != nil {
 		return fmt.Errorf("fallback to %s: %w", target, err)
 	}
@@ -331,7 +359,7 @@ func (s *TunnelServer) fallback(ctx context.Context, client net.Conn, preface []
 			return fmt.Errorf("write fallback preface: %w", err)
 		}
 	}
-	log.Printf("TLS fallback %s -> %s", client.RemoteAddr(), target)
+	log.Printf("TCP fallback %s -> %s", client.RemoteAddr(), target)
 	relay(client, upstream)
 	return nil
 }
@@ -558,10 +586,12 @@ func readClientHelloRandom(r io.Reader) (preface, clientRandom []byte, err error
 	var handshake bytes.Buffer
 	for handshake.Len() < maxClientHello {
 		header := make([]byte, 5)
-		if _, err = io.ReadFull(r, header); err != nil {
+		n, readErr := io.ReadFull(r, header)
+		preface = append(preface, header[:n]...)
+		if readErr != nil {
+			err = readErr
 			return preface, nil, err
 		}
-		preface = append(preface, header...)
 		if header[0] != 22 {
 			return preface, nil, errors.New("first TLS record is not a handshake")
 		}
@@ -570,10 +600,12 @@ func readClientHelloRandom(r io.Reader) (preface, clientRandom []byte, err error
 			return preface, nil, errors.New("invalid TLS ClientHello length")
 		}
 		payload := make([]byte, length)
-		if _, err = io.ReadFull(r, payload); err != nil {
+		n, readErr = io.ReadFull(r, payload)
+		preface = append(preface, payload[:n]...)
+		if readErr != nil {
+			err = readErr
 			return preface, nil, err
 		}
-		preface = append(preface, payload...)
 		handshake.Write(payload)
 		data := handshake.Bytes()
 		if len(data) < 4 {
