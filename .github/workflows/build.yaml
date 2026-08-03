@@ -53,7 +53,7 @@ jobs:
         run: |
           mv go.mod.backup go.mod
           ${{ matrix.tag }} go build
-          mv ixa-go* ixa-go-${{ matrix.dickname }}
+          mv ./ixa-go* ./ixa-go-${{ matrix.dickname }}
 
       - name: Release
         uses: softprops/action-gh-release@master
