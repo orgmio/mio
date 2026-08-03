@@ -6,7 +6,7 @@ listen = "0.0.0.0"
 port = 2080
 
 [peer]
-server = "192.168.0.2"
+server = "1.1.1.1"
 port = 443
 key = "e85bef458ce6a7fe1fe89fc4a2d12e7550bebede578fb54a6c829b267cd7583b"
-sni = "https://www.example.com:443"
+sni = "https://example.com:443"
