@@ -39,7 +39,11 @@ curl --socks5-hostname 127.0.0.1:2080 https://example.com
 
 服务端会在同一个端口监听TCP和UDP：TCP认证失败时原样转发到sni，UDP流量则按客户端会话原样转发到sni以兼容QUIC/HTTP3探测。
 
-SOCKS5目前支持TCP CONNECT和UDP ASSOCIATE。客户端优先复用一条QUIC连接，每个TCP代理连接使用独立双向stream；UDP数据报也通过QUIC stream传输。QUIC不可用时自动回退TCP/TLS。
+SOCKS5目前支持TCP CONNECT和UDP ASSOCIATE。
+
+客户端先建立TCP/TLS连接并在后台预热QUIC；预热完成后复用QUIC连接，每个TCP代理连接使用独立双向stream，UDP数据报也通过QUIC stream传输。
+
+QUIC不可用时继续使用TCP/TLS。
 
 服务端启动时会验证并缓存sni站点的真实证书链，客户端通过反向HMAC验证服务端。
 
@@ -91,10 +95,12 @@ local.867678.xyz 127.0.0.1
 需要做到：
 
 ```
-应用 → SOCKS5 → ixa 客户端 → QUIC（失败时TCP/TLS）→ ixa 服务端 → 目标网站
+应用 → SOCKS5 → ixa 客户端 → 首次TCP/TLS、随后QUIC（失败时保持TCP）→ ixa 服务端 → 目标网站
 ```
 
-首先尝试QUIC主通道并在stream请求中校验HMAC；QUIC不可用时，回退到HTTP/1.1 TLS握手并校验TLS ClientHello中的HMAC。
+首先建立提供`h2,http/1.1`的TCP/TLS通道并校验TLS ClientHello中的HMAC，同时在后台建立`h3` QUIC。
+
+QUIC连接会发送HTTP/3 control、SETTINGS与QPACK单向流，随后在双向stream请求中校验HMAC。
 
 如果不是，直接返回伪装域名的内容。
 

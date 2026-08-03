@@ -3,10 +3,10 @@
 # 与对端叫做1.1.1.1的服务器的443/https,quic端口通信
 [socks5]
 listen = "0.0.0.0"
-port = 11763
+port = 2080
 
 [peer]
 server = "192.168.0.2"
-port = 8443
+port = 443
 key = "e85bef458ce6a7fe1fe89fc4a2d12e7550bebede578fb54a6c829b267cd7583b"
-sni = "https://www.taobao.com:443"
+sni = "https://www.example.com:443"

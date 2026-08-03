@@ -78,6 +78,7 @@ type TunnelClient struct {
 	quicMu         sync.Mutex
 	quicConn       *quic.Conn
 	quicPacketConn net.PacketConn
+	quicWarming    bool
 }
 
 func NewTunnelClient(config PeerConfig) (*TunnelClient, error) {
@@ -130,13 +131,14 @@ func (c *TunnelClient) ExchangeUDP(ctx context.Context, target string, payload [
 }
 
 func (c *TunnelClient) openTunnel(ctx context.Context, command byte, target string) (net.Conn, error) {
-	quicCtx, cancel := context.WithTimeout(ctx, quicProbeTimeout)
-	defer cancel()
-	if conn, err := c.openQUIC(quicCtx, command, target); err == nil {
-		return conn, nil
-	} else {
-		log.Printf("QUIC unavailable for %s, falling back to TCP: %v", target, err)
+	if c.hasQUICConnection() {
+		if conn, err := c.openQUIC(ctx, command, target); err == nil {
+			return conn, nil
+		} else {
+			log.Printf("QUIC stream unavailable for %s, falling back to TCP: %v", target, err)
+		}
 	}
+	c.warmQUIC()
 	return c.openTCPTunnel(ctx, command, target)
 }
 
@@ -151,14 +153,18 @@ func (c *TunnelClient) openTCPTunnel(ctx context.Context, command byte, target s
 		return nil, fmt.Errorf("create ClientHello authentication: %w", err)
 	}
 	observed := &serverHelloObserverConn{Conn: raw}
-	tlsConn := tlsfork.Client(observed, &tlsfork.Config{
+	tlsConn := tlsfork.UClient(observed, &tlsfork.Config{
 		MinVersion:                    tlsfork.VersionTLS13,
 		ServerName:                    c.cover.host,
 		InsecureSkipVerify:            true,
 		InsecureSkipCertificateVerify: true,
-		NextProtos:                    []string{"http/1.1"},
-		Rand:                          io.MultiReader(bytes.NewReader(authRandom), rand.Reader),
-	})
+		NextProtos:                    []string{"h2", "http/1.1"},
+	}, tlsfork.HelloChrome_Auto)
+	if err := tlsConn.BuildHandshakeState(); err != nil {
+		raw.Close()
+		return nil, fmt.Errorf("build Chrome ClientHello: %w", err)
+	}
+	tlsConn.HandshakeState.Hello.Random = append([]byte(nil), authRandom...)
 	deadline, ok := ctx.Deadline()
 	if !ok {
 		deadline = time.Now().Add(tunnelDialTimeout)
@@ -230,7 +236,7 @@ func newTunnelServer(config TunnelServerConfig, loadCertificate func(coverTarget
 		tlsConfig: &tls.Config{
 			MinVersion:             tls.VersionTLS13,
 			Certificates:           []tls.Certificate{certificate},
-			NextProtos:             []string{"http/1.1"},
+			NextProtos:             []string{"h2", "http/1.1"},
 			SessionTicketsDisabled: true,
 		},
 		dialContext: dialer.DialContext,

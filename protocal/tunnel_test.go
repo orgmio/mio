@@ -388,6 +388,70 @@ func TestQUICAuthenticatedTunnelAndRelay(t *testing.T) {
 	}
 }
 
+func TestChromeAuthenticatedTCPTunnel(t *testing.T) {
+	const keyHex = "93cb499ed398baa3f36f76c20483989ec911f8fe5ccd43a3c5f58952ade56435"
+	server, err := newTunnelServer(
+		TunnelServerConfig{Key: keyHex, SNI: "https://example.com:443"},
+		func(cover coverTarget) (tls.Certificate, error) { return ephemeralCertificate(cover.host) },
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server.dialContext = func(_ context.Context, network, address string) (net.Conn, error) {
+		upstream, echo := net.Pipe()
+		go func() {
+			defer echo.Close()
+			_, _ = io.Copy(echo, echo)
+		}()
+		return upstream, nil
+	}
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	serverDone := make(chan error, 1)
+	go func() {
+		raw, acceptErr := listener.Accept()
+		if acceptErr != nil {
+			serverDone <- acceptErr
+			return
+		}
+		defer raw.Close()
+		serverDone <- server.serveRaw(context.Background(), raw)
+	}()
+
+	address := listener.Addr().(*net.TCPAddr)
+	client, err := NewTunnelClient(PeerConfig{
+		Server: address.IP.String(), Port: address.Port, Key: keyHex,
+		SNI: "https://example.com:443",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	conn, err := client.openTCPTunnel(ctx, tunnelCommandTCP, "example.com:443")
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload := []byte("Chrome-shaped authenticated tunnel")
+	if _, err := conn.Write(payload); err != nil {
+		t.Fatal(err)
+	}
+	got := make([]byte, len(payload))
+	if _, err := io.ReadFull(conn, got); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, payload) {
+		t.Fatalf("TCP relay payload = %q", got)
+	}
+	_ = conn.Close()
+	if err := <-serverDone; err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestAuthenticatedClientRandom(t *testing.T) {
 	key := bytes.Repeat([]byte{0x42}, 32)
 	now := time.Unix(1_800_000_000, 0)

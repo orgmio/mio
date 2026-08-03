@@ -12,12 +12,42 @@ import (
 	"time"
 
 	quic "github.com/quic-go/quic-go"
+	"github.com/quic-go/quic-go/quicvarint"
 )
 
 const (
-	ixaQUICALPN      = "ixa/1"
+	ixaQUICALPN      = "h3"
 	quicProbeTimeout = 2 * time.Second
 )
+
+func (c *TunnelClient) hasQUICConnection() bool {
+	c.quicMu.Lock()
+	defer c.quicMu.Unlock()
+	return c.quicConn != nil && c.quicConn.Context().Err() == nil
+}
+
+func (c *TunnelClient) warmQUIC() {
+	c.quicMu.Lock()
+	if c.quicWarming || (c.quicConn != nil && c.quicConn.Context().Err() == nil) {
+		c.quicMu.Unlock()
+		return
+	}
+	c.quicWarming = true
+	c.quicMu.Unlock()
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), quicProbeTimeout)
+		defer cancel()
+		_, err := c.quicConnection(ctx)
+		c.quicMu.Lock()
+		c.quicWarming = false
+		c.quicMu.Unlock()
+		if err != nil {
+			log.Printf("QUIC warm-up failed; TCP remains active: %v", err)
+			return
+		}
+		log.Printf("QUIC warm-up complete; new proxy connections will use HTTP/3")
+	}()
+}
 
 type quicStreamConn struct {
 	*quic.Stream
@@ -98,6 +128,11 @@ func (c *TunnelClient) quicConnection(ctx context.Context) (*quic.Conn, error) {
 		packetConn.Close()
 		return nil, err
 	}
+	if err := initializeHTTP3Facade(ctx, connection); err != nil {
+		_ = connection.CloseWithError(1, "HTTP/3 initialization failed")
+		packetConn.Close()
+		return nil, err
+	}
 	c.quicConn = connection
 	c.quicPacketConn = packetConn
 	return connection, nil
@@ -155,6 +190,10 @@ func (s *TunnelServer) serveQUIC(ctx context.Context, packetConn *net.UDPConn) e
 }
 
 func (s *TunnelServer) handleQUICConnection(ctx context.Context, connection *quic.Conn) {
+	if err := initializeHTTP3Facade(ctx, connection); err != nil {
+		_ = connection.CloseWithError(1, "HTTP/3 initialization failed")
+		return
+	}
 	for {
 		stream, err := connection.AcceptStream(ctx)
 		if err != nil {
@@ -168,6 +207,53 @@ func (s *TunnelServer) handleQUICConnection(ctx context.Context, connection *qui
 				stream.CancelWrite(1)
 			}
 		}()
+	}
+}
+
+// initializeHTTP3Facade emits the mandatory HTTP/3 unidirectional streams.
+// Proxy payload uses authenticated bidirectional streams after this standard
+// HTTP/3-shaped connection preface.
+func initializeHTTP3Facade(ctx context.Context, connection *quic.Conn) error {
+	control, err := connection.OpenUniStreamSync(ctx)
+	if err != nil {
+		return err
+	}
+	// stream type 0x00, SETTINGS frame 0x04, setting
+	// SETTINGS_ENABLE_CONNECT_PROTOCOL (0x08) = 1.
+	settings := quicvarint.Append(nil, 0)
+	settings = quicvarint.Append(settings, 4)
+	settingsPayload := quicvarint.Append(nil, 8)
+	settingsPayload = quicvarint.Append(settingsPayload, 1)
+	settings = quicvarint.Append(settings, uint64(len(settingsPayload)))
+	settings = append(settings, settingsPayload...)
+	if err := writeAll(control, settings); err != nil {
+		return err
+	}
+	encoder, err := connection.OpenUniStreamSync(ctx)
+	if err != nil {
+		return err
+	}
+	if err := writeAll(encoder, quicvarint.Append(nil, 2)); err != nil {
+		return err
+	}
+	decoder, err := connection.OpenUniStreamSync(ctx)
+	if err != nil {
+		return err
+	}
+	if err := writeAll(decoder, quicvarint.Append(nil, 3)); err != nil {
+		return err
+	}
+	go drainHTTP3UniStreams(connection)
+	return nil
+}
+
+func drainHTTP3UniStreams(connection *quic.Conn) {
+	for {
+		stream, err := connection.AcceptUniStream(connection.Context())
+		if err != nil {
+			return
+		}
+		go func() { _, _ = io.Copy(io.Discard, stream) }()
 	}
 }
 
