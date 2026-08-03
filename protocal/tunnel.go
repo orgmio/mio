@@ -29,6 +29,7 @@ import (
 	"time"
 
 	quic "github.com/quic-go/quic-go"
+	"github.com/quic-go/quic-go/http3"
 	tlsfork "github.com/refraction-networking/utls"
 )
 
@@ -83,6 +84,7 @@ type TunnelClient struct {
 	quicDialErr    error
 	quicWarming    bool
 	quicScheduled  bool
+	h3Transport    *http3.Transport
 }
 
 func NewTunnelClient(config PeerConfig) (*TunnelClient, error) {
@@ -451,7 +453,7 @@ func (s *TunnelServer) handle(ctx context.Context, client net.Conn) error {
 		return exchangeUDP(client, upstream, target)
 	}
 	log.Printf("ixa CONNECT %s -> %s", client.RemoteAddr(), target)
-	if _, ok := client.(*quicStreamConn); !ok {
+	if _, ok := client.(interface{ isQUICStream() }); !ok {
 		client = newVisionConn(client)
 	}
 	relay(client, upstream)

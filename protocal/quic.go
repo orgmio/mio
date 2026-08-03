@@ -1,20 +1,27 @@
 package protocal
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/base64"
 	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
 	"log"
 	"net"
+	"net/http"
+	"net/http/httputil"
+	"net/url"
+	"strings"
+	"sync"
 	"time"
 
 	quic "github.com/quic-go/quic-go"
-	"github.com/quic-go/quic-go/quicvarint"
+	"github.com/quic-go/quic-go/http3"
 )
 
 const (
@@ -89,6 +96,8 @@ type quicStreamConn struct {
 	connection *quic.Conn
 }
 
+func (*quicStreamConn) isQUICStream() {}
+
 func (c *quicStreamConn) LocalAddr() net.Addr  { return c.connection.LocalAddr() }
 func (c *quicStreamConn) RemoteAddr() net.Addr { return c.connection.RemoteAddr() }
 
@@ -97,33 +106,99 @@ func (c *TunnelClient) openQUIC(ctx context.Context, command byte, target string
 	if err != nil {
 		return nil, err
 	}
-	stream, err := connection.OpenStreamSync(ctx)
+	var token bytes.Buffer
+	if err := writeTunnelRequest(&token, c.key, command, target, time.Now()); err != nil {
+		return nil, err
+	}
+	requestReader, requestWriter := io.Pipe()
+	streamCtx, cancel := context.WithCancel(context.Background())
+	request, err := http.NewRequestWithContext(streamCtx, http.MethodConnect, "https://"+c.cover.host+"/", requestReader)
 	if err != nil {
+		cancel()
+		return nil, err
+	}
+	request.Host = c.cover.host
+	request.Header.Set("Proxy-Authorization", "Bearer "+base64.RawURLEncoding.EncodeToString(token.Bytes()))
+	responseCh := make(chan struct {
+		response *http.Response
+		err      error
+	}, 1)
+	go func() {
+		response, roundTripErr := c.http3Transport().RoundTrip(request)
+		responseCh <- struct {
+			response *http.Response
+			err      error
+		}{response, roundTripErr}
+	}()
+	var response *http.Response
+	select {
+	case result := <-responseCh:
+		response, err = result.response, result.err
+	case <-ctx.Done():
+		cancel()
+		_ = requestWriter.CloseWithError(context.Cause(ctx))
+		return nil, context.Cause(ctx)
+	}
+	if err != nil {
+		cancel()
+		_ = requestWriter.CloseWithError(err)
 		c.dropQUIC(connection)
 		return nil, err
 	}
-	streamConn := &quicStreamConn{Stream: stream, connection: connection}
-	if deadline, ok := ctx.Deadline(); ok {
-		_ = streamConn.SetDeadline(deadline)
+	if response.StatusCode != http.StatusOK {
+		cancel()
+		_ = requestWriter.Close()
+		_ = response.Body.Close()
+		return nil, fmt.Errorf("HTTP/3 CONNECT rejected: %s", response.Status)
 	}
-	if err := writeTunnelRequest(streamConn, c.key, command, target, time.Now()); err != nil {
-		stream.CancelRead(1)
-		stream.CancelWrite(1)
+	streamConn := &http3StreamConn{reader: response.Body, writer: requestWriter, connection: connection, cancel: cancel}
+	status := []byte{0}
+	if _, err := io.ReadFull(streamConn, status); err != nil {
+		_ = streamConn.Close()
 		return nil, err
 	}
-	response := []byte{0}
-	if _, err := io.ReadFull(streamConn, response); err != nil {
-		stream.CancelRead(1)
-		stream.CancelWrite(1)
-		return nil, err
+	if status[0] != 0 {
+		_ = streamConn.Close()
+		return nil, &tunnelRejectedError{code: status[0]}
 	}
-	if response[0] != 0 {
-		_ = stream.Close()
-		return nil, &tunnelRejectedError{code: response[0]}
-	}
-	_ = streamConn.SetDeadline(time.Time{})
 	return streamConn, nil
 }
+
+func (c *TunnelClient) http3Transport() *http3.Transport {
+	c.quicMu.Lock()
+	defer c.quicMu.Unlock()
+	if c.h3Transport == nil {
+		c.h3Transport = &http3.Transport{
+			TLSClientConfig: &tls.Config{ServerName: c.cover.host, NextProtos: []string{ixaQUICALPN}},
+			QUICConfig:      braveQUICClientConfig(),
+			Dial: func(ctx context.Context, _ string, _ *tls.Config, _ *quic.Config) (*quic.Conn, error) {
+				return c.quicConnection(ctx)
+			},
+		}
+	}
+	return c.h3Transport
+}
+
+type http3StreamConn struct {
+	reader     io.ReadCloser
+	writer     *io.PipeWriter
+	connection *quic.Conn
+	cancel     context.CancelFunc
+	closeOnce  sync.Once
+}
+
+func (*http3StreamConn) isQUICStream()                 {}
+func (c *http3StreamConn) Read(p []byte) (int, error)  { return c.reader.Read(p) }
+func (c *http3StreamConn) Write(p []byte) (int, error) { return c.writer.Write(p) }
+func (c *http3StreamConn) Close() error {
+	c.closeOnce.Do(func() { c.cancel(); _ = c.writer.Close(); _ = c.reader.Close() })
+	return nil
+}
+func (c *http3StreamConn) LocalAddr() net.Addr            { return c.connection.LocalAddr() }
+func (c *http3StreamConn) RemoteAddr() net.Addr           { return c.connection.RemoteAddr() }
+func (*http3StreamConn) SetDeadline(time.Time) error      { return nil }
+func (*http3StreamConn) SetReadDeadline(time.Time) error  { return nil }
+func (*http3StreamConn) SetWriteDeadline(time.Time) error { return nil }
 
 func (c *TunnelClient) quicConnection(ctx context.Context) (*quic.Conn, error) {
 	for {
@@ -207,11 +282,6 @@ func (c *TunnelClient) dialQUIC(ctx context.Context) (*quic.Conn, net.PacketConn
 		NextProtos: []string{ixaQUICALPN},
 	}, braveQUICClientConfig())
 	if err != nil {
-		packetConn.Close()
-		return nil, nil, err
-	}
-	if err := initializeHTTP3Facade(ctx, connection); err != nil {
-		_ = connection.CloseWithError(1, "HTTP/3 initialization failed")
 		packetConn.Close()
 		return nil, nil, err
 	}
@@ -308,70 +378,84 @@ func braveQUICTransportParameters() []quic.TransportParameter {
 }
 
 func (s *TunnelServer) handleQUICConnection(ctx context.Context, connection *quic.Conn) {
-	if err := initializeHTTP3Facade(ctx, connection); err != nil {
-		_ = connection.CloseWithError(1, "HTTP/3 initialization failed")
+	server := &http3.Server{Handler: http.HandlerFunc(s.handleHTTP3)}
+	if err := server.ServeQUICConn(connection); err != nil && ctx.Err() == nil {
+		log.Printf("HTTP/3 connection %s: %v", connection.RemoteAddr(), err)
+	}
+}
+
+func (s *TunnelServer) handleHTTP3(w http.ResponseWriter, request *http.Request) {
+	token, ok := parseHTTP3TunnelToken(request.Header.Get("Proxy-Authorization"), s.key)
+	if request.Method != http.MethodConnect || !ok {
+		s.reverseProxyHTTP3().ServeHTTP(w, request)
 		return
 	}
-	for {
-		stream, err := connection.AcceptStream(ctx)
-		if err != nil {
-			return
-		}
-		go func() {
-			conn := &quicStreamConn{Stream: stream, connection: connection}
-			defer stream.Close()
-			if err := s.handle(ctx, conn); err != nil && ctx.Err() == nil {
-				log.Printf("ixa QUIC stream %s: %v", connection.RemoteAddr(), err)
-				stream.CancelRead(1)
-			}
-		}()
+	w.WriteHeader(http.StatusOK)
+	if flusher, ok := w.(http.Flusher); ok {
+		flusher.Flush()
+	}
+	conn := &http3ServerConn{reader: io.MultiReader(bytes.NewReader(token), request.Body), writer: w, request: request}
+	defer request.Body.Close()
+	if err := s.handle(request.Context(), conn); err != nil && request.Context().Err() == nil {
+		log.Printf("ixa HTTP/3 CONNECT %s: %v", request.RemoteAddr, err)
 	}
 }
 
-// initializeHTTP3Facade emits the mandatory HTTP/3 unidirectional streams.
-// Proxy payload uses authenticated bidirectional streams after this standard
-// HTTP/3-shaped connection preface.
-func initializeHTTP3Facade(ctx context.Context, connection *quic.Conn) error {
-	control, err := connection.OpenUniStreamSync(ctx)
+func parseHTTP3TunnelToken(header string, key []byte) ([]byte, bool) {
+	const prefix = "Bearer "
+	if !strings.HasPrefix(header, prefix) {
+		return nil, false
+	}
+	token, err := base64.RawURLEncoding.DecodeString(strings.TrimPrefix(header, prefix))
 	if err != nil {
-		return err
+		return nil, false
 	}
-	settings := quicvarint.Append(nil, 0)
-	settings = quicvarint.Append(settings, 4)
-	settingsPayload := quicvarint.Append(nil, 8)
-	settingsPayload = quicvarint.Append(settingsPayload, 1)
-	settings = quicvarint.Append(settings, uint64(len(settingsPayload)))
-	settings = append(settings, settingsPayload...)
-	if err := writeAll(control, settings); err != nil {
-		return err
-	}
-	encoder, err := connection.OpenUniStreamSync(ctx)
-	if err != nil {
-		return err
-	}
-	if err := writeAll(encoder, quicvarint.Append(nil, 2)); err != nil {
-		return err
-	}
-	decoder, err := connection.OpenUniStreamSync(ctx)
-	if err != nil {
-		return err
-	}
-	if err := writeAll(decoder, quicvarint.Append(nil, 3)); err != nil {
-		return err
-	}
-	go drainHTTP3UniStreams(connection)
-	return nil
+	_, _, err = readTunnelRequest(bytes.NewReader(token), key, time.Now())
+	return token, err == nil
 }
 
-func drainHTTP3UniStreams(connection *quic.Conn) {
-	for {
-		stream, err := connection.AcceptUniStream(connection.Context())
-		if err != nil {
-			return
-		}
-		go func() { _, _ = io.Copy(io.Discard, stream) }()
+func (s *TunnelServer) reverseProxyHTTP3() http.Handler {
+	target := &url.URL{Scheme: "https", Host: s.cover.address}
+	proxy := httputil.NewSingleHostReverseProxy(target)
+	baseDirector := proxy.Director
+	proxy.Director = func(request *http.Request) {
+		baseDirector(request)
+		request.Host = s.cover.host
+		request.Header.Del("Proxy-Authorization")
 	}
+	proxy.Transport = &http.Transport{
+		DialContext:     s.dialContext,
+		TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12, ServerName: s.cover.host},
+	}
+	return proxy
 }
+
+type http3ServerConn struct {
+	reader  io.Reader
+	writer  io.Writer
+	request *http.Request
+}
+
+func (*http3ServerConn) isQUICStream()                {}
+func (c *http3ServerConn) Read(p []byte) (int, error) { return c.reader.Read(p) }
+func (c *http3ServerConn) Write(p []byte) (int, error) {
+	n, err := c.writer.Write(p)
+	if f, ok := c.writer.(http.Flusher); ok {
+		f.Flush()
+	}
+	return n, err
+}
+func (*http3ServerConn) Close() error                     { return nil }
+func (c *http3ServerConn) LocalAddr() net.Addr            { return http3Addr(c.request.Host) }
+func (c *http3ServerConn) RemoteAddr() net.Addr           { return http3Addr(c.request.RemoteAddr) }
+func (*http3ServerConn) SetDeadline(time.Time) error      { return nil }
+func (*http3ServerConn) SetReadDeadline(time.Time) error  { return nil }
+func (*http3ServerConn) SetWriteDeadline(time.Time) error { return nil }
+
+type http3Addr string
+
+func (a http3Addr) Network() string { return "udp" }
+func (a http3Addr) String() string  { return string(a) }
 
 type quicFallbackWriter struct{ transport *quic.Transport }
 
@@ -400,3 +484,5 @@ func (s *TunnelServer) serveNonQUICPackets(ctx context.Context, transport *quic.
 }
 
 var _ net.Conn = (*quicStreamConn)(nil)
+var _ net.Conn = (*http3StreamConn)(nil)
+var _ net.Conn = (*http3ServerConn)(nil)
