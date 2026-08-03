@@ -7,6 +7,7 @@ import (
 
 	"github.com/quic-go/quic-go/quicvarint"
 	utls "github.com/refraction-networking/utls"
+	"github.com/refraction-networking/utls/dicttls"
 )
 
 type tlsQUICConnection interface {
@@ -64,8 +65,11 @@ func chromeQUICClientHello(rawTransportParameters []byte) *utls.ClientHelloSpec 
 			&utls.ALPNExtension{AlpnProtocols: []string{"h3"}},
 			&utls.SNIExtension{},
 			&utls.QUICTransportParametersExtension{TransportParameters: decodeUTLSTransportParameters(rawTransportParameters)},
-			&utls.SupportedVersionsExtension{Versions: []uint16{utls.GREASE_PLACEHOLDER, utls.VersionTLS13}},
-			utls.BoringGREASEECH(),
+			&utls.SupportedVersionsExtension{Versions: []uint16{utls.VersionTLS13}},
+			&utls.GREASEEncryptedClientHelloExtension{
+				CandidateCipherSuites: []utls.HPKESymmetricCipherSuite{{KdfId: dicttls.HKDF_SHA256, AeadId: dicttls.AEAD_AES_128_GCM}},
+				CandidatePayloadLens:  []uint16{224}, // AES-GCM adds 16 bytes, matching Brave's 240-byte payload.
+			},
 			&utls.UtlsCompressCertExtension{Algorithms: []utls.CertCompressionAlgo{utls.CertCompressionBrotli}},
 			&utls.PSKKeyExchangeModesExtension{Modes: []uint8{utls.PskModeDHE}},
 			&utls.SignatureAlgorithmsExtension{SupportedSignatureAlgorithms: []utls.SignatureScheme{
