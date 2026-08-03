@@ -6,7 +6,7 @@ import (
 	"runtime/debug"
 )
 
-const Version = "0.0.4"
+const Version = "0.0.5"
 
 func PrintVersion() {
 	fmt.Printf("ixa-go V%s\n\n", Version)

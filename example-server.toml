@@ -1,5 +1,5 @@
 # 这是本项目的服务端示例配置文件
-# 监听80/http,443/https,quic
+# 监听任何IP到本机的443/https,quic
 [server]
 listen = "0.0.0.0"
 port = 443
