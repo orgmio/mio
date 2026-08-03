@@ -23,7 +23,7 @@ func Run(args []string) error {
 		args = args[1:]
 	}
 	flags := flag.NewFlagSet("ixa-go", flag.ContinueOnError)
-	configPath := "example.toml"
+	configPath := "config.toml"
 	flags.StringVar(&configPath, "c", configPath, "path to the TOML configuration file")
 	if err := flags.Parse(args); err != nil {
 		return err

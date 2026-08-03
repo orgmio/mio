@@ -35,10 +35,12 @@ type sealer interface {
 }
 
 type payload struct {
-	streamFrames []ackhandler.StreamFrame
-	frames       []ackhandler.Frame
-	ack          *wire.AckFrame
-	length       protocol.ByteCount
+	streamFrames       []ackhandler.StreamFrame
+	frames             []ackhandler.Frame
+	ack                *wire.AckFrame
+	length             protocol.ByteCount
+	preserveFrameOrder bool
+	trailingPadding    bool
 }
 
 type longHeaderPacket struct {
@@ -527,6 +529,10 @@ func (p *packetPacker) maybeGetCryptoPacket(
 
 	ack := p.acks.GetAckFrame(encLevel, now, !hasRetransmission && !hasCryptoData())
 	var pl payload
+	if encLevel == protocol.EncryptionInitial && p.initialStream.braveLayout && p.initialStream.end == 1787 {
+		pl.preserveFrameOrder = true
+		pl.trailingPadding = true
+	}
 	if !hasCryptoData() && !hasRetransmission && ack == nil {
 		if !addPingIfEmpty {
 			// nothing to send
@@ -988,12 +994,12 @@ func (p *packetPacker) appendPacketPayload(raw []byte, pl payload, paddingLen pr
 			return nil, err
 		}
 	}
-	if paddingLen > 0 {
+	if paddingLen > 0 && !pl.trailingPadding {
 		raw = append(raw, make([]byte, paddingLen)...)
 	}
 	// Randomize the order of the control frames.
 	// This makes sure that the receiver doesn't rely on the order in which frames are packed.
-	if len(pl.frames) > 1 {
+	if len(pl.frames) > 1 && !pl.preserveFrameOrder {
 		p.rand.Shuffle(len(pl.frames), func(i, j int) { pl.frames[i], pl.frames[j] = pl.frames[j], pl.frames[i] })
 	}
 	for _, f := range pl.frames {
@@ -1002,6 +1008,9 @@ func (p *packetPacker) appendPacketPayload(raw []byte, pl payload, paddingLen pr
 		if err != nil {
 			return nil, err
 		}
+	}
+	if paddingLen > 0 && pl.trailingPadding {
+		raw = append(raw, make([]byte, paddingLen)...)
 	}
 	for _, f := range pl.streamFrames {
 		var err error
