@@ -39,7 +39,7 @@ curl --socks5-hostname 127.0.0.1:2080 https://example.com
 
 协议行为旨在模拟`caddy-real/`下存在的wireshark抓包文件
 
-- **way-ixa.pcapng**:我前前后后用他访问了 B站 ip.cn ip138.com bing.com www.gov.cn 以及中间不小心触发了两次谷歌搜索
+- **way-ixa.pcapng**:我前前后后用他访问了些正常的网站用于测试伪装程度
 - **way-brave-caddy-baidu.pcapng**:brave访问一个反代了百度的caddy的行为 配置文件在Caddyfile
 
 需注意local.867678.xyz没有真正的权威指向 这是我用来测试的

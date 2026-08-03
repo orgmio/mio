@@ -130,7 +130,15 @@ func populateConfig(config *Config) *Config {
 		InitialPacketSize:                initialPacketSize,
 		DisablePathMTUDiscovery:          config.DisablePathMTUDiscovery,
 		EnableStreamResetPartialDelivery: config.EnableStreamResetPartialDelivery,
-		Allow0RTT:                        config.Allow0RTT,
-		Tracer:                           config.Tracer,
+		AdditionalClientTransportParameters: func() []TransportParameter {
+			parameters := make([]TransportParameter, len(config.AdditionalClientTransportParameters))
+			for i, parameter := range config.AdditionalClientTransportParameters {
+				parameters[i] = TransportParameter{ID: parameter.ID, Value: append([]byte(nil), parameter.Value...)}
+			}
+			return parameters
+		}(),
+		UseChromeClientHello: config.UseChromeClientHello,
+		Allow0RTT:            config.Allow0RTT,
+		Tracer:               config.Tracer,
 	}
 }

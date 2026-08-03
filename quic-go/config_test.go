@@ -128,6 +128,10 @@ func configWithNonZeroNonFunctionFields(t *testing.T) *Config {
 			f.Set(reflect.ValueOf(true))
 		case "EnableStreamResetPartialDelivery":
 			f.Set(reflect.ValueOf(true))
+		case "AdditionalClientTransportParameters":
+			f.Set(reflect.ValueOf([]TransportParameter{{ID: 0x11, Value: []byte{1, 2, 3}}}))
+		case "UseChromeClientHello":
+			f.Set(reflect.ValueOf(true))
 		default:
 			t.Fatalf("all fields must be accounted for, but saw unknown field %q", fn)
 		}
@@ -196,4 +200,19 @@ func TestConfigZeroLimits(t *testing.T) {
 	c := populateConfig(config)
 	require.Zero(t, c.MaxIncomingStreams)
 	require.Zero(t, c.MaxIncomingUniStreams)
+}
+
+func TestPopulateConfigPreservesChromeClientFingerprint(t *testing.T) {
+	input := &Config{
+		UseChromeClientHello: true,
+		AdditionalClientTransportParameters: []TransportParameter{
+			{ID: 0x11, Value: []byte{1, 2, 3}},
+		},
+	}
+	populated := populateConfig(input)
+	require.True(t, populated.UseChromeClientHello)
+	require.Equal(t, input.AdditionalClientTransportParameters, populated.AdditionalClientTransportParameters)
+
+	input.AdditionalClientTransportParameters[0].Value[0] = 9
+	require.Equal(t, byte(1), populated.AdditionalClientTransportParameters[0].Value[0])
 }
