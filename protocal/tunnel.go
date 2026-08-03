@@ -3,10 +3,13 @@ package protocal
 import (
 	"bytes"
 	"context"
+	"crypto"
 	"crypto/ecdsa"
+	"crypto/ed25519"
 	"crypto/elliptic"
 	"crypto/hmac"
 	"crypto/rand"
+	"crypto/rsa"
 	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
@@ -39,22 +42,23 @@ const (
 	clientNonceSize   = 8
 	clientTagSize     = 16
 	maxClientHello    = 64 * 1024
+	tunnelCommandTCP  = 1
+	tunnelCommandUDP  = 3
+	maxUDPPayload     = 65507
 )
 
 type PeerConfig struct {
-	Server   string `toml:"server"`
-	Port     int    `toml:"port"`
-	LinkPort int    `toml:"link_port"` // Reserved for the HTTP redirect POC stage.
-	Key      string `toml:"key"`
-	SNI      string `toml:"sni"`
+	Server string `toml:"server"`
+	Port   int    `toml:"port"`
+	Key    string `toml:"key"`
+	SNI    string `toml:"sni"`
 }
 
 type TunnelServerConfig struct {
-	Listen   string `toml:"listen"`
-	Port     int    `toml:"port"`
-	LinkPort int    `toml:"link_port"` // Reserved for the HTTP redirect POC stage.
-	Key      string `toml:"key"`
-	SNI      string `toml:"sni"`
+	Listen string `toml:"listen"`
+	Port   int    `toml:"port"`
+	Key    string `toml:"key"`
+	SNI    string `toml:"sni"`
 }
 
 func (c PeerConfig) Address() string {
@@ -93,6 +97,35 @@ func (c *TunnelClient) DialContext(ctx context.Context, network, target string) 
 	if network != "tcp" {
 		return nil, fmt.Errorf("ixa POC only supports TCP, got %q", network)
 	}
+	return c.openTunnel(ctx, tunnelCommandTCP, target)
+}
+
+func (c *TunnelClient) ExchangeUDP(ctx context.Context, target string, payload []byte) ([]byte, error) {
+	if len(payload) > maxUDPPayload {
+		return nil, fmt.Errorf("UDP payload exceeds %d bytes", maxUDPPayload)
+	}
+	conn, err := c.openTunnel(ctx, tunnelCommandUDP, target)
+	if err != nil {
+		return nil, err
+	}
+	defer conn.Close()
+	packet := binary.BigEndian.AppendUint16(nil, uint16(len(payload)))
+	packet = append(packet, payload...)
+	if _, err := conn.Write(packet); err != nil {
+		return nil, err
+	}
+	lengthBytes := make([]byte, 2)
+	if _, err := io.ReadFull(conn, lengthBytes); err != nil {
+		return nil, err
+	}
+	response := make([]byte, int(binary.BigEndian.Uint16(lengthBytes)))
+	if _, err := io.ReadFull(conn, response); err != nil {
+		return nil, err
+	}
+	return response, nil
+}
+
+func (c *TunnelClient) openTunnel(ctx context.Context, command byte, target string) (net.Conn, error) {
 	raw, err := c.dialer.DialContext(ctx, "tcp", c.config.Address())
 	if err != nil {
 		return nil, err
@@ -128,7 +161,7 @@ func (c *TunnelClient) DialContext(ctx context.Context, network, target string) 
 		}
 		return nil, errors.New("ServerHello HMAC authentication failed")
 	}
-	if err := writeTunnelRequest(tlsConn, c.key, target, time.Now()); err != nil {
+	if err := writeTunnelRequest(tlsConn, c.key, command, target, time.Now()); err != nil {
 		tlsConn.Close()
 		return nil, err
 	}
@@ -156,6 +189,10 @@ type TunnelServer struct {
 }
 
 func NewTunnelServer(config TunnelServerConfig) (*TunnelServer, error) {
+	return newTunnelServer(config, fetchCoverCertificate)
+}
+
+func newTunnelServer(config TunnelServerConfig, loadCertificate func(coverTarget) (tls.Certificate, error)) (*TunnelServer, error) {
 	key, err := decodeKey(config.Key)
 	if err != nil {
 		return nil, err
@@ -164,9 +201,9 @@ func NewTunnelServer(config TunnelServerConfig) (*TunnelServer, error) {
 	if err != nil {
 		return nil, fmt.Errorf("invalid server.sni: %w", err)
 	}
-	certificate, err := ephemeralCertificate(cover.host)
+	certificate, err := loadCertificate(cover)
 	if err != nil {
-		return nil, fmt.Errorf("generate ephemeral certificate: %w", err)
+		return nil, fmt.Errorf("load certificate from %s: %w", cover.address, err)
 	}
 	dialer := &net.Dialer{Timeout: tunnelDialTimeout, KeepAlive: 30 * time.Second}
 	return &TunnelServer{
@@ -182,6 +219,55 @@ func NewTunnelServer(config TunnelServerConfig) (*TunnelServer, error) {
 		dialContext: dialer.DialContext,
 		clients:     make(map[net.Conn]struct{}),
 	}, nil
+}
+
+func fetchCoverCertificate(cover coverTarget) (tls.Certificate, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), tunnelDialTimeout)
+	defer cancel()
+	dialer := &net.Dialer{Timeout: tunnelDialTimeout, KeepAlive: 30 * time.Second}
+	raw, err := dialer.DialContext(ctx, "tcp", cover.address)
+	if err != nil {
+		return tls.Certificate{}, err
+	}
+	defer raw.Close()
+	conn := tls.Client(raw, &tls.Config{
+		MinVersion: tls.VersionTLS13,
+		ServerName: cover.host,
+	})
+	if err := conn.HandshakeContext(ctx); err != nil {
+		return tls.Certificate{}, fmt.Errorf("TLS handshake and certificate verification: %w", err)
+	}
+	state := conn.ConnectionState()
+	if len(state.PeerCertificates) == 0 {
+		return tls.Certificate{}, errors.New("cover server returned no certificate")
+	}
+	privateKey, err := signingKeyForCertificate(state.PeerCertificates[0])
+	if err != nil {
+		return tls.Certificate{}, err
+	}
+	chain := make([][]byte, len(state.PeerCertificates))
+	for i, certificate := range state.PeerCertificates {
+		chain[i] = append([]byte(nil), certificate.Raw...)
+	}
+	return tls.Certificate{
+		Certificate: chain,
+		PrivateKey:  privateKey,
+		Leaf:        state.PeerCertificates[0],
+	}, nil
+}
+
+func signingKeyForCertificate(certificate *x509.Certificate) (crypto.Signer, error) {
+	switch publicKey := certificate.PublicKey.(type) {
+	case *rsa.PublicKey:
+		return rsa.GenerateKey(rand.Reader, max(2048, publicKey.N.BitLen()))
+	case *ecdsa.PublicKey:
+		return ecdsa.GenerateKey(publicKey.Curve, rand.Reader)
+	case ed25519.PublicKey:
+		_, privateKey, err := ed25519.GenerateKey(rand.Reader)
+		return privateKey, err
+	default:
+		return nil, fmt.Errorf("unsupported cover certificate public key type %T", certificate.PublicKey)
+	}
 }
 
 func (s *TunnelServer) ListenAndServe(ctx context.Context) error {
@@ -252,11 +338,18 @@ func (s *TunnelServer) fallback(ctx context.Context, client net.Conn, preface []
 
 func (s *TunnelServer) handle(ctx context.Context, client net.Conn) error {
 	_ = client.SetDeadline(time.Now().Add(tunnelDialTimeout))
-	target, err := readTunnelRequest(client, s.key, time.Now())
+	command, target, err := readTunnelRequest(client, s.key, time.Now())
 	if err != nil {
 		return err
 	}
-	upstream, err := s.dialContext(ctx, "tcp", target)
+	network := "tcp"
+	if command == tunnelCommandUDP {
+		network = "udp"
+	} else if command != tunnelCommandTCP {
+		_, _ = client.Write([]byte{2})
+		return fmt.Errorf("unsupported tunnel command %d", command)
+	}
+	upstream, err := s.dialContext(ctx, network, target)
 	if err != nil {
 		_, _ = client.Write([]byte{1})
 		return fmt.Errorf("connect to %s: %w", target, err)
@@ -266,12 +359,15 @@ func (s *TunnelServer) handle(ctx context.Context, client net.Conn) error {
 		return err
 	}
 	_ = client.SetDeadline(time.Time{})
+	if command == tunnelCommandUDP {
+		return exchangeUDP(client, upstream, target)
+	}
 	log.Printf("ixa CONNECT %s -> %s", client.RemoteAddr(), target)
 	relay(client, upstream)
 	return nil
 }
 
-func writeTunnelRequest(w io.Writer, key []byte, target string, now time.Time) error {
+func writeTunnelRequest(w io.Writer, key []byte, command byte, target string, now time.Time) error {
 	if len(target) == 0 || len(target) > maxTargetSize {
 		return fmt.Errorf("invalid target length %d", len(target))
 	}
@@ -283,6 +379,7 @@ func writeTunnelRequest(w io.Writer, key []byte, target string, now time.Time) e
 		return err
 	}
 	header = append(header, nonce...)
+	header = append(header, command)
 	mac := hmac.New(sha256.New, key)
 	_, _ = mac.Write(header)
 	_, _ = mac.Write([]byte(target))
@@ -293,41 +390,71 @@ func writeTunnelRequest(w io.Writer, key []byte, target string, now time.Time) e
 	return err
 }
 
-func readTunnelRequest(r io.Reader, key []byte, now time.Time) (string, error) {
+func readTunnelRequest(r io.Reader, key []byte, now time.Time) (byte, string, error) {
 	header := make([]byte, len(tunnelMagic)+8+authNonceSize)
 	if _, err := io.ReadFull(r, header); err != nil {
-		return "", err
+		return 0, "", err
 	}
 	if string(header[:len(tunnelMagic)]) != tunnelMagic {
-		return "", errors.New("invalid tunnel preface")
+		return 0, "", errors.New("invalid tunnel preface")
 	}
 	timestamp := time.Unix(int64(binary.BigEndian.Uint64(header[len(tunnelMagic):])), 0)
 	if delta := now.Sub(timestamp); delta > maxClockSkew || delta < -maxClockSkew {
-		return "", errors.New("authentication timestamp outside allowed window")
+		return 0, "", errors.New("authentication timestamp outside allowed window")
 	}
+	commandBytes := []byte{0}
+	if _, err := io.ReadFull(r, commandBytes); err != nil {
+		return 0, "", err
+	}
+	header = append(header, commandBytes[0])
 	receivedMAC := make([]byte, authMACSize)
 	if _, err := io.ReadFull(r, receivedMAC); err != nil {
-		return "", err
+		return 0, "", err
 	}
 	lengthBytes := make([]byte, 2)
 	if _, err := io.ReadFull(r, lengthBytes); err != nil {
-		return "", err
+		return 0, "", err
 	}
 	length := int(binary.BigEndian.Uint16(lengthBytes))
 	if length == 0 || length > maxTargetSize {
-		return "", fmt.Errorf("invalid target length %d", length)
+		return 0, "", fmt.Errorf("invalid target length %d", length)
 	}
 	targetBytes := make([]byte, length)
 	if _, err := io.ReadFull(r, targetBytes); err != nil {
-		return "", err
+		return 0, "", err
 	}
 	mac := hmac.New(sha256.New, key)
 	_, _ = mac.Write(header)
 	_, _ = mac.Write(targetBytes)
 	if !hmac.Equal(receivedMAC, mac.Sum(nil)) {
-		return "", errors.New("tunnel authentication failed")
+		return 0, "", errors.New("tunnel authentication failed")
 	}
-	return string(targetBytes), nil
+	return commandBytes[0], string(targetBytes), nil
+}
+
+func exchangeUDP(tunnel, upstream net.Conn, target string) error {
+	lengthBytes := make([]byte, 2)
+	if _, err := io.ReadFull(tunnel, lengthBytes); err != nil {
+		return err
+	}
+	length := int(binary.BigEndian.Uint16(lengthBytes))
+	payload := make([]byte, length)
+	if _, err := io.ReadFull(tunnel, payload); err != nil {
+		return err
+	}
+	_ = upstream.SetDeadline(time.Now().Add(tunnelDialTimeout))
+	if _, err := upstream.Write(payload); err != nil {
+		return fmt.Errorf("send UDP to %s: %w", target, err)
+	}
+	response := make([]byte, maxUDPPayload)
+	n, err := upstream.Read(response)
+	if err != nil {
+		return fmt.Errorf("receive UDP from %s: %w", target, err)
+	}
+	packet := binary.BigEndian.AppendUint16(nil, uint16(n))
+	packet = append(packet, response[:n]...)
+	_, err = tunnel.Write(packet)
+	return err
 }
 
 func decodeKey(value string) ([]byte, error) {

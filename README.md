@@ -37,11 +37,15 @@ curl --socks5-hostname 127.0.0.1:2080 https://example.com
 
 目前已实现ClientHello.Random与ServerHello.Random双向隐藏HMAC认证，以及认证失败时回落到sni对应的真实站点。
 
-临时证书不会被客户端验证，尚未实现QUIC、真实证书、Caddy本地回落和 Brave 指纹模拟，不应用于生产环境。
+SOCKS5目前支持TCP CONNECT和UDP ASSOCIATE，UDP在POC阶段以每个数据报建立一次短TLS隧道的方式传输。
+
+服务端启动时会验证并缓存sni站点的真实证书链，客户端通过反向HMAC验证服务端。
+
+尚未实现QUIC、Caddy本地回落和 Brave 指纹模拟，不应用于生产环境。
 
 ## 📄 配置文件
 
-`sni`字段必须是一个HTTPS URL，因为需要偷他的证书(没错这就是类Reality);端口可以任意。
+`sni`字段必须是一个支持TLS1.3的HTTPS URL，因为需要偷他的证书(没错这就是类Reality);端口可以任意。
 
 # 🏃 协议行为
 

@@ -3,9 +3,10 @@ package protocal
 import (
 	"bytes"
 	"context"
-	"crypto/ecdsa"
-	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
+	"encoding/binary"
 	"io"
 	"net"
 	"strings"
@@ -19,32 +20,76 @@ func TestTunnelRequestRoundTrip(t *testing.T) {
 	key := bytes.Repeat([]byte{0x42}, 32)
 	now := time.Unix(1_800_000_000, 0)
 	var packet bytes.Buffer
-	if err := writeTunnelRequest(&packet, key, "example.com:443", now); err != nil {
+	if err := writeTunnelRequest(&packet, key, tunnelCommandTCP, "example.com:443", now); err != nil {
 		t.Fatal(err)
 	}
-	target, err := readTunnelRequest(&packet, key, now)
+	command, target, err := readTunnelRequest(&packet, key, now)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if target != "example.com:443" {
 		t.Fatalf("target = %q", target)
 	}
+	if command != tunnelCommandTCP {
+		t.Fatalf("command = %d", command)
+	}
+}
+
+func TestUDPExchangePreservesDatagram(t *testing.T) {
+	tunnelClient, tunnelServer := net.Pipe()
+	upstreamServer, upstreamPeer := net.Pipe()
+	done := make(chan error, 1)
+	go func() {
+		done <- exchangeUDP(tunnelServer, upstreamServer, "dns.example:53")
+	}()
+	payload := []byte("udp query")
+	request := binary.BigEndian.AppendUint16(nil, uint16(len(payload)))
+	request = append(request, payload...)
+	go func() {
+		buffer := make([]byte, len(payload))
+		_, _ = io.ReadFull(upstreamPeer, buffer)
+		_, _ = upstreamPeer.Write([]byte("udp response"))
+	}()
+	if _, err := tunnelClient.Write(request); err != nil {
+		t.Fatal(err)
+	}
+	length := make([]byte, 2)
+	if _, err := io.ReadFull(tunnelClient, length); err != nil {
+		t.Fatal(err)
+	}
+	response := make([]byte, int(binary.BigEndian.Uint16(length)))
+	if _, err := io.ReadFull(tunnelClient, response); err != nil {
+		t.Fatal(err)
+	}
+	if string(response) != "udp response" {
+		t.Fatalf("response = %q", response)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestTLSAuthenticatedTunnelAndRelay(t *testing.T) {
 	const keyHex = "93cb499ed398baa3f36f76c20483989ec911f8fe5ccd43a3c5f58952ade56435"
-	server, err := NewTunnelServer(TunnelServerConfig{Key: keyHex, SNI: "https://example.com:443"})
+	server, err := newTunnelServer(
+		TunnelServerConfig{Key: keyHex, SNI: "https://example.com:443"},
+		func(cover coverTarget) (tls.Certificate, error) {
+			certificate, err := ephemeralCertificate(cover.host)
+			if err != nil {
+				return tls.Certificate{}, err
+			}
+			leaf, err := x509.ParseCertificate(certificate.Certificate[0])
+			if err != nil {
+				return tls.Certificate{}, err
+			}
+			certificate.PrivateKey, err = signingKeyForCertificate(leaf)
+			certificate.Leaf = leaf
+			return certificate, err
+		},
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Deliberately sign CertificateVerify with a key that does not match the
-	// certificate. The ixa TLS fork accepts it only because peer identity is
-	// verified by the ServerHello HMAC below.
-	mismatchedKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
-	server.tlsConfig.Certificates[0].PrivateKey = mismatchedKey
 	upstream, echo := net.Pipe()
 	server.dialContext = func(_ context.Context, network, address string) (net.Conn, error) {
 		if network != "tcp" || address != "example.com:443" {
@@ -78,7 +123,7 @@ func TestTLSAuthenticatedTunnelAndRelay(t *testing.T) {
 	})
 	defer client.Close()
 	_ = client.SetDeadline(time.Now().Add(3 * time.Second))
-	if err := writeTunnelRequest(client, server.key, "example.com:443", time.Now()); err != nil {
+	if err := writeTunnelRequest(client, server.key, tunnelCommandTCP, "example.com:443", time.Now()); err != nil {
 		t.Fatal(err)
 	}
 	serverRandom, err := readServerHelloRandom(observed.Bytes())
@@ -193,10 +238,10 @@ func TestParseCoverTarget(t *testing.T) {
 func TestTunnelRequestRejectsWrongKey(t *testing.T) {
 	now := time.Unix(1_800_000_000, 0)
 	var packet bytes.Buffer
-	if err := writeTunnelRequest(&packet, bytes.Repeat([]byte{1}, 32), "example.com:443", now); err != nil {
+	if err := writeTunnelRequest(&packet, bytes.Repeat([]byte{1}, 32), tunnelCommandTCP, "example.com:443", now); err != nil {
 		t.Fatal(err)
 	}
-	_, err := readTunnelRequest(&packet, bytes.Repeat([]byte{2}, 32), now)
+	_, _, err := readTunnelRequest(&packet, bytes.Repeat([]byte{2}, 32), now)
 	if err == nil || !strings.Contains(err.Error(), "authentication failed") {
 		t.Fatalf("expected authentication failure, got %v", err)
 	}
@@ -205,10 +250,10 @@ func TestTunnelRequestRejectsWrongKey(t *testing.T) {
 func TestTunnelRequestRejectsExpiredTimestamp(t *testing.T) {
 	key := bytes.Repeat([]byte{1}, 32)
 	var packet bytes.Buffer
-	if err := writeTunnelRequest(&packet, key, "example.com:443", time.Unix(100, 0)); err != nil {
+	if err := writeTunnelRequest(&packet, key, tunnelCommandTCP, "example.com:443", time.Unix(100, 0)); err != nil {
 		t.Fatal(err)
 	}
-	_, err := readTunnelRequest(&packet, key, time.Unix(200, 0))
+	_, _, err := readTunnelRequest(&packet, key, time.Unix(200, 0))
 	if err == nil || !strings.Contains(err.Error(), "timestamp") {
 		t.Fatalf("expected timestamp failure, got %v", err)
 	}
