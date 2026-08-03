@@ -12,6 +12,9 @@
 *.test
 ixa-go-*
 
+# Test config file
+test.toml
+
 # Code coverage profiles and other test artifacts
 *.out
 coverage.*

@@ -473,6 +473,11 @@ var newClientConnection = func(
 		EnableResetStreamAt:       conf.EnableStreamResetPartialDelivery,
 	}
 	params.UseChromeClientHello = conf.UseChromeClientHello
+	if conf.UseChromeClientHello {
+		params.MaxAckDelay = protocol.DefaultMaxAckDelay
+		params.MaxUDPPayloadSize = 1472
+		params.ActiveConnectionIDLimit = protocol.DefaultActiveConnectionIDLimit
+	}
 	for _, parameter := range conf.AdditionalClientTransportParameters {
 		params.AdditionalClientParameters = append(params.AdditionalClientParameters, wire.AdditionalTransportParameter{
 			ID:    parameter.ID,
@@ -480,7 +485,11 @@ var newClientConnection = func(
 		})
 	}
 	if s.config.EnableDatagrams {
-		params.MaxDatagramFrameSize = wire.MaxDatagramSize
+		if conf.UseChromeClientHello {
+			params.MaxDatagramFrameSize = 65536
+		} else {
+			params.MaxDatagramFrameSize = wire.MaxDatagramSize
+		}
 	} else {
 		params.MaxDatagramFrameSize = protocol.InvalidByteCount
 	}

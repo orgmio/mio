@@ -8,6 +8,8 @@ ixa-specific changes:
   `Config.AdditionalClientTransportParameters`;
 - opt-in Chromium QUIC ClientHello generation through uTLS with
   `Config.UseChromeClientHello`;
+- Brave 1.93 / Chromium 151 client transport-parameter ordering, values and
+  eight-byte Initial destination connection IDs when that mode is enabled;
 - future QUIC handshake fingerprint work is kept here instead of patching the
   module cache or relying on process-global state.
 

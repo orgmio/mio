@@ -18,8 +18,6 @@
 
 ## 🧪 如何起飞
 
-当前 POC 用 QUIC/TLS 1.3、TCP/TLS 1.3 和 HMAC-SHA256 验证以下最小链路：
-
 先启动服务端：
 
 ```bash
@@ -33,7 +31,28 @@
 curl --socks5-hostname 127.0.0.1:2080 https://example.com
 ```
 
-此阶段只验证加密、认证、目标封装和双向转发。
+## 📄 配置文件
+
+`sni`字段必须是一个支持TLS1.3的HTTPS URL，因为需要偷他的证书(没错这是类Reality);端口可以任意。
+
+# 🏃 协议行为
+
+协议行为旨在模拟`caddy-real/`下存在的wireshark抓包文件
+
+- **way-ixa.pcapng**:我前前后后用他访问了 B站 ip.cn ip138.com bing.com www.gov.cn 以及中间不小心触发了两次谷歌搜索
+- **way-brave-caddy-baidu.pcapng**:brave访问一个反代了百度的caddy的行为 配置文件在Caddyfile
+
+需注意local.867678.xyz没有真正的权威指向 这是我用来测试的
+
+```ini
+local.867678.xyz 127.0.0.1
+```
+
+这个文件夹下是由wireshark抓包的真实brave访问真实caddy的行为
+
+客户端行为旨在模拟ArchLinux源`extra`中带的`Brave`浏览器的无痕模式
+
+只要在公网传输的数据包与wireshark抓到的真实行为无异此项目就算成功
 
 目前已实现ClientHello.Random与ServerHello.Random双向隐藏HMAC认证，以及认证失败时回落到sni对应的真实站点。
 
@@ -47,32 +66,11 @@ QUIC不可用时继续使用TCP/TLS。
 
 服务端启动时会验证并缓存sni站点的真实证书链，客户端通过反向HMAC验证服务端。
 
-TCP回退已经加入有限的早期随机填充与边界扰动（Vision-lite），之后自动切回无填充的数据流。尚未实现Caddy本地回落、Brave指纹模拟和TLS record layer安全退出，不应用于生产环境。
+TCP回退已经加入有限的早期随机填充与边界扰动（Vision-lite），之后自动切回无填充的数据流。
 
-## 📄 配置文件
+尚未实现Caddy本地回落、Brave指纹模拟和TLS record layer安全退出，不应用于生产环境。（我觉得他实现了这是GPT写的）
 
-`sni`字段必须是一个支持TLS1.3的HTTPS URL，因为需要偷他的证书(没错这就是类Reality);端口可以任意。
-
-# 🏃 协议行为
-
-协议行为旨在模拟`caddy-real/`下存在的wireshark抓包文件
-
-- **way-ixa.pcapng**:我前前后后用他访问了 B站 ip.cn ip138.com bing.com www.gov.cn 以及中间不小心触发了两次谷歌搜索
-- **way-brave-caddy-baidu.pcapng**:brave访问一个反代了百度的caddy的行为 配置文件在Caddyfile
-
-这个文件夹下是由wireshark抓包的真实brave访问真实caddy的行为
-
-客户端行为旨在模拟ArchLinux源`extra`中带的`Brave`浏览器的无痕模式
-
-只要在公网传输的数据包与wireshark抓到的真实行为无异此项目就算成功
-
-下方为测试时hosts文件中的不同 需注意local.867678.xyz没有真正的权威指向 这是我用来测试的
-
-```ini
-local.867678.xyz 127.0.0.1
-```
-
-> 一般情况下
+一般情况下
 
 | 客户端                                   | 服务端                                   |
 | ---------------------------------------- | ---------------------------------------- |
@@ -80,15 +78,7 @@ local.867678.xyz 127.0.0.1
 | 尝试用HTTP/3+TLS1.3+X25519MLKEM768连接   | 准备接收QUIC                             |
 | QUIC建立成功                             | 交换密钥并开始传输加密数据               |
 
-> 失败处理
-
-| 客户端             | 服务端                   |
-| ------------------ | ------------------------ |
-| 客户端尝试QUIC失败 | 退回HTTP/1.1             |
-| 证书验证错误       | 立刻切断连接             |
-| 迟迟没有回应       | 超时后关闭连接并重新尝试 |
-
-> 数据外表
+数据外表
 
 应当看起来像是一个brave在访问Caddy（TLS）
 
@@ -104,6 +94,15 @@ QUIC连接会发送HTTP/3 control、SETTINGS与QPACK单向流，随后在双向s
 
 如果不是，直接返回伪装域名的内容。
 
+失败处理
+
+| 客户端             | 服务端                   |
+| ------------------ | ------------------------ |
+| 客户端尝试QUIC失败 | 退回HTTP/1.1             |
+| 证书验证错误       | 立刻切断连接             |
+| 迟迟没有回应       | 超时后关闭连接并重新尝试 |
+
+
 ## ⚠️ 安全性警告
 
 为了配置的方便ixa协议并不像reality那样需要一个PublicKey和一个ShortId
@@ -116,7 +115,7 @@ QUIC连接会发送HTTP/3 control、SETTINGS与QPACK单向流，随后在双向s
 openssl rand -hex 32
 ```
 
-这里以HMAC（RFC2104）的规范为例
+这里以HMAC`（RFC2104）`的规范为例
 | 长度 单位：字节 | 安全性 |
 | ---- | ---- |
 | 16 | 刚达到不那么容易破解的临界点 |

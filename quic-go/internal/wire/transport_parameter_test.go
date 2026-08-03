@@ -32,6 +32,54 @@ func appendInitialSourceConnectionID(b []byte) []byte {
 	return append(b, []byte("foobar")...)
 }
 
+func TestMarshalChromeClientTransportParameters(t *testing.T) {
+	versionInfo := []byte{0, 0, 0, 1, 0x7a, 0x2a, 0x9a, 0x8a, 0, 0, 0, 1}
+	p := &TransportParameters{
+		UseChromeClientHello:           true,
+		InitialMaxData:                 15 * 1024 * 1024,
+		InitialMaxStreamDataBidiLocal:  6 * 1024 * 1024,
+		InitialMaxStreamDataBidiRemote: 6 * 1024 * 1024,
+		InitialMaxStreamDataUni:        6 * 1024 * 1024,
+		MaxBidiStreamNum:               100,
+		MaxUniStreamNum:                103,
+		MaxIdleTimeout:                 30 * time.Second,
+		MaxUDPPayloadSize:              1472,
+		MaxDatagramFrameSize:           65536,
+		AdditionalClientParameters: []AdditionalTransportParameter{
+			{ID: 0x11, Value: versionInfo},
+			{ID: 0x3128, Value: []byte("ORIG")},
+		},
+	}
+
+	data := p.Marshal(protocol.PerspectiveClient)
+	var ids []uint64
+	values := make(map[uint64][]byte)
+	for len(data) > 0 {
+		id, n, err := quicvarint.Parse(data)
+		require.NoError(t, err)
+		data = data[n:]
+		length, n, err := quicvarint.Parse(data)
+		require.NoError(t, err)
+		data = data[n:]
+		require.LessOrEqual(t, length, uint64(len(data)))
+		ids = append(ids, id)
+		values[id] = append([]byte(nil), data[:length]...)
+		data = data[length:]
+	}
+
+	require.Len(t, ids, 13)
+	require.Equal(t, []uint64{0x4, 0xf, 0x9, 0x20, 0x1, 0x11, 0x8, 0x7}, ids[:8])
+	require.True(t, ids[8] >= 27 && (ids[8]-27)%31 == 0, "invalid GREASE ID %#x", ids[8])
+	require.Equal(t, []uint64{0x6, 0x5, 0x3128, 0x3}, ids[9:])
+	require.Len(t, values[ids[8]], 3)
+	require.Equal(t, versionInfo, values[0x11])
+	require.Equal(t, []byte("ORIG"), values[0x3128])
+	require.Equal(t, quicvarint.Append(nil, 1472), values[0x3])
+	require.Equal(t, quicvarint.Append(nil, 65536), values[0x20])
+	require.NotContains(t, ids, uint64(maxAckDelayParameterID))
+	require.NotContains(t, ids, uint64(activeConnectionIDLimitParameterID))
+}
+
 func TestTransportParametersStringRepresentation(t *testing.T) {
 	rcid := protocol.ParseConnectionID([]byte{0xde, 0xad, 0xc0, 0xde})
 	minAckDelay := 42 * time.Millisecond
