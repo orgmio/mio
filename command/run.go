@@ -52,7 +52,7 @@ func Run(args []string) error {
 		if err != nil {
 			return fmt.Errorf("create ixa server: %w", err)
 		}
-		log.Printf("ixa POC server listening on %s (TCP/TLS 1.3 + UDP fallback)", cfg.Server.Address())
+		log.Printf("ixa POC server listening on %s (QUIC primary + TCP/TLS 1.3 fallback)", cfg.Server.Address())
 		if err := server.ListenAndServe(ctx); err != nil {
 			return fmt.Errorf("serve ixa tunnel: %w", err)
 		}
@@ -67,7 +67,7 @@ func Run(args []string) error {
 		return fmt.Errorf("create ixa client: %w", err)
 	}
 	server := protocal.NewSOCKS5ServerWithTransport(cfg.SOCKS5, tunnel.DialContext, tunnel.ExchangeUDP)
-	log.Printf("SOCKS5 listening on %s; ixa peer %s", cfg.SOCKS5.Address(), cfg.Peer.Address())
+	log.Printf("SOCKS5 listening on %s; ixa peer %s (QUIC primary, TCP fallback)", cfg.SOCKS5.Address(), cfg.Peer.Address())
 	if err := server.ListenAndServe(ctx); err != nil {
 		return fmt.Errorf("serve SOCKS5: %w", err)
 	}

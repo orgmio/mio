@@ -18,7 +18,7 @@
 
 ## 🧪 如何起飞
 
-当前 POC 用 TLS 1.3 和 HMAC-SHA256 验证以下最小链路：
+当前 POC 用 QUIC/TLS 1.3、TCP/TLS 1.3 和 HMAC-SHA256 验证以下最小链路：
 
 先启动服务端：
 
@@ -39,11 +39,11 @@ curl --socks5-hostname 127.0.0.1:2080 https://example.com
 
 服务端会在同一个端口监听TCP和UDP：TCP认证失败时原样转发到sni，UDP流量则按客户端会话原样转发到sni以兼容QUIC/HTTP3探测。
 
-SOCKS5目前支持TCP CONNECT和UDP ASSOCIATE，UDP在POC阶段以每个数据报建立一次短TLS隧道的方式传输。
+SOCKS5目前支持TCP CONNECT和UDP ASSOCIATE。客户端优先复用一条QUIC连接，每个TCP代理连接使用独立双向stream；UDP数据报也通过QUIC stream传输。QUIC不可用时自动回退TCP/TLS。
 
 服务端启动时会验证并缓存sni站点的真实证书链，客户端通过反向HMAC验证服务端。
 
-尚未实现QUIC、Caddy本地回落和 Brave 指纹模拟，不应用于生产环境。
+TCP回退已经加入有限的早期随机填充与边界扰动（Vision-lite），之后自动切回无填充的数据流。尚未实现Caddy本地回落、Brave指纹模拟和TLS record layer安全退出，不应用于生产环境。
 
 ## 📄 配置文件
 
@@ -91,12 +91,10 @@ local.867678.xyz 127.0.0.1
 需要做到：
 
 ```
-应用 → SOCKS5 → ixa 客户端 → TLS 隧道 → ixa 服务端 → 目标网站
+应用 → SOCKS5 → ixa 客户端 → QUIC（失败时TCP/TLS）→ ixa 服务端 → 目标网站
 ```
 
-首先尝试HTTP/1.1 TLS握手中服务端将校验TLSClientHello中的HMAC是否为设置的密码
-
-如果是，在建立TCP连接之后开始尝试建立QUIC隧道;QUIC成功之后按照标准QUIC的方式传输;如果不成功按照HTTP/1.1或2的方式传输
+首先尝试QUIC主通道并在stream请求中校验HMAC；QUIC不可用时，回退到HTTP/1.1 TLS握手并校验TLS ClientHello中的HMAC。
 
 如果不是，直接返回伪装域名的内容。
 

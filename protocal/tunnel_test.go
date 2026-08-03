@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	quic "github.com/quic-go/quic-go"
 	tlsfork "github.com/refraction-networking/utls"
 )
 
@@ -258,12 +259,13 @@ func TestTLSAuthenticatedTunnelAndRelay(t *testing.T) {
 	if response[0] != 0 {
 		t.Fatalf("tunnel response = %d", response[0])
 	}
+	visionClient := newVisionConn(client)
 	payload := []byte("ixa tunnel poc")
-	if _, err := client.Write(payload); err != nil {
+	if _, err := visionClient.Write(payload); err != nil {
 		t.Fatal(err)
 	}
 	got := make([]byte, len(payload))
-	if _, err := io.ReadFull(client, got); err != nil {
+	if _, err := io.ReadFull(visionClient, got); err != nil {
 		t.Fatal(err)
 	}
 	if !bytes.Equal(got, payload) {
@@ -277,6 +279,112 @@ func TestTLSAuthenticatedTunnelAndRelay(t *testing.T) {
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("tunnel handler did not stop")
+	}
+}
+
+func TestVisionConnPreservesBytesAcrossRawSwitch(t *testing.T) {
+	left, right := net.Pipe()
+	client := newVisionConn(left)
+	server := newVisionConn(right)
+	defer client.Close()
+	defer server.Close()
+	payload := make([]byte, visionBudget*2+123)
+	if _, err := rand.Read(payload); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		done <- writeAll(client, payload)
+	}()
+	got := make([]byte, len(payload))
+	if _, err := io.ReadFull(server, got); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, payload) {
+		t.Fatal("vision framing changed payload")
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestQUICAuthenticatedTunnelAndRelay(t *testing.T) {
+	const keyHex = "93cb499ed398baa3f36f76c20483989ec911f8fe5ccd43a3c5f58952ade56435"
+	key, err := decodeKey(keyHex)
+	if err != nil {
+		t.Fatal(err)
+	}
+	certificate, err := ephemeralCertificate("example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	packetConn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	transport := &quic.Transport{Conn: packetConn}
+	listener, err := transport.Listen(&tls.Config{
+		Certificates: []tls.Certificate{certificate},
+		NextProtos:   []string{ixaQUICALPN},
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	defer transport.Close()
+
+	server := &TunnelServer{key: key}
+	server.dialContext = func(_ context.Context, network, address string) (net.Conn, error) {
+		if network != "tcp" || address != "example.com:443" {
+			t.Fatalf("unexpected dial %s %s", network, address)
+		}
+		upstream, echo := net.Pipe()
+		go func() {
+			defer echo.Close()
+			_, _ = io.Copy(echo, echo)
+		}()
+		return upstream, nil
+	}
+	serverContext, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() {
+		connection, acceptErr := listener.Accept(serverContext)
+		if acceptErr == nil {
+			server.handleQUICConnection(serverContext, connection)
+		}
+	}()
+
+	address := packetConn.LocalAddr().(*net.UDPAddr)
+	client := &TunnelClient{
+		config: PeerConfig{Server: address.IP.String(), Port: address.Port},
+		key:    key,
+		cover:  coverTarget{host: "example.com"},
+	}
+	defer func() {
+		client.quicMu.Lock()
+		connection := client.quicConn
+		client.quicMu.Unlock()
+		if connection != nil {
+			client.dropQUIC(connection)
+		}
+	}()
+	ctx, stop := context.WithTimeout(context.Background(), 3*time.Second)
+	defer stop()
+	conn, err := client.openQUIC(ctx, tunnelCommandTCP, "example.com:443")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	payload := []byte("QUIC tunnel payload")
+	if _, err := conn.Write(payload); err != nil {
+		t.Fatal(err)
+	}
+	got := make([]byte, len(payload))
+	if _, err := io.ReadFull(conn, got); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, payload) {
+		t.Fatalf("QUIC relay payload = %q", got)
 	}
 }
 

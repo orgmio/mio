@@ -28,6 +28,7 @@ import (
 	"sync"
 	"time"
 
+	quic "github.com/quic-go/quic-go"
 	tlsfork "github.com/refraction-networking/utls"
 )
 
@@ -70,10 +71,13 @@ func (c TunnelServerConfig) Address() string {
 }
 
 type TunnelClient struct {
-	config PeerConfig
-	key    []byte
-	cover  coverTarget
-	dialer net.Dialer
+	config         PeerConfig
+	key            []byte
+	cover          coverTarget
+	dialer         net.Dialer
+	quicMu         sync.Mutex
+	quicConn       *quic.Conn
+	quicPacketConn net.PacketConn
 }
 
 func NewTunnelClient(config PeerConfig) (*TunnelClient, error) {
@@ -126,6 +130,17 @@ func (c *TunnelClient) ExchangeUDP(ctx context.Context, target string, payload [
 }
 
 func (c *TunnelClient) openTunnel(ctx context.Context, command byte, target string) (net.Conn, error) {
+	quicCtx, cancel := context.WithTimeout(ctx, quicProbeTimeout)
+	defer cancel()
+	if conn, err := c.openQUIC(quicCtx, command, target); err == nil {
+		return conn, nil
+	} else {
+		log.Printf("QUIC unavailable for %s, falling back to TCP: %v", target, err)
+	}
+	return c.openTCPTunnel(ctx, command, target)
+}
+
+func (c *TunnelClient) openTCPTunnel(ctx context.Context, command byte, target string) (net.Conn, error) {
 	raw, err := c.dialer.DialContext(ctx, "tcp", c.config.Address())
 	if err != nil {
 		return nil, err
@@ -175,7 +190,7 @@ func (c *TunnelClient) openTunnel(ctx context.Context, command byte, target stri
 		return nil, fmt.Errorf("tunnel server rejected target (code %d)", response[0])
 	}
 	_ = tlsConn.SetDeadline(time.Time{})
-	return tlsConn, nil
+	return newVisionConn(tlsConn), nil
 }
 
 type TunnelServer struct {
@@ -290,7 +305,7 @@ func (s *TunnelServer) ListenAndServe(ctx context.Context) error {
 	defer udpListener.Close()
 	udpErrors := make(chan error, 1)
 	go func() {
-		udpErr := s.serveUDPForwarder(ctx, udpListener)
+		udpErr := s.serveQUIC(ctx, udpListener)
 		udpErrors <- udpErr
 		if udpErr != nil {
 			_ = listener.Close()
@@ -391,6 +406,9 @@ func (s *TunnelServer) handle(ctx context.Context, client net.Conn) error {
 		return exchangeUDP(client, upstream, target)
 	}
 	log.Printf("ixa CONNECT %s -> %s", client.RemoteAddr(), target)
+	if _, ok := client.(*quicStreamConn); !ok {
+		client = newVisionConn(client)
+	}
 	relay(client, upstream)
 	return nil
 }
