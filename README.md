@@ -57,7 +57,7 @@ TCP回退已经加入有限的早期随机填充与边界扰动（Vision-lite）
 
 协议行为旨在模拟`caddy-real/`下存在的wireshark抓包文件
 
-- **way-brave-caddy.pcapng**:brave访问一个空白的caddy的行为
+- **way-ixa.pcapng**:我前前后后用他访问了 B站 ip.cn ip138.com bing.com www.gov.cn 以及中间不小心触发了两次谷歌搜索
 - **way-brave-caddy-baidu.pcapng**:brave访问一个反代了百度的caddy的行为 配置文件在Caddyfile
 
 这个文件夹下是由wireshark抓包的真实brave访问真实caddy的行为

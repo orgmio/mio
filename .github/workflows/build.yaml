@@ -62,5 +62,7 @@ jobs:
           body: |
             # 📝 Release Note
             Fixes and improvements
+            ## Fake object
+            Brave 1.93.129 (official, Arch Linux x86_64) ; Chromium: 151.0.7922.71 ; Caddy 2.11.4
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -19,3 +19,5 @@ require (
 )
 
 replace github.com/refraction-networking/utls => ./utls
+
+replace github.com/quic-go/quic-go => ./quic-go

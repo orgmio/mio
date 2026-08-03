@@ -2,8 +2,10 @@ package protocal
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -16,9 +18,19 @@ import (
 )
 
 const (
-	ixaQUICALPN      = "h3"
-	quicProbeTimeout = 2 * time.Second
+	ixaQUICALPN           = "h3"
+	quicProbeTimeout      = 2 * time.Second
+	quicWarmupMin         = 250 * time.Millisecond
+	quicWarmupMax         = 550 * time.Millisecond
+	braveStreamWindow     = 6 * 1024 * 1024
+	braveConnectionWindow = 15 * 1024 * 1024
 )
+
+type tunnelRejectedError struct{ code byte }
+
+func (e *tunnelRejectedError) Error() string {
+	return fmt.Sprintf("QUIC tunnel server rejected target (code %d)", e.code)
+}
 
 func (c *TunnelClient) hasQUICConnection() bool {
 	c.quicMu.Lock()
@@ -46,6 +58,29 @@ func (c *TunnelClient) warmQUIC() {
 			return
 		}
 		log.Printf("QUIC warm-up complete; new proxy connections will use HTTP/3")
+	}()
+}
+
+func (c *TunnelClient) scheduleQUICWarmup() {
+	c.quicMu.Lock()
+	if c.quicScheduled || c.quicWarming || (c.quicConn != nil && c.quicConn.Context().Err() == nil) {
+		c.quicMu.Unlock()
+		return
+	}
+	c.quicScheduled = true
+	c.quicMu.Unlock()
+	delayMillis, err := randomBetween(int(quicWarmupMin/time.Millisecond), int(quicWarmupMax/time.Millisecond))
+	if err != nil {
+		delayMillis = int(quicWarmupMin / time.Millisecond)
+	}
+	go func() {
+		timer := time.NewTimer(time.Duration(delayMillis) * time.Millisecond)
+		defer timer.Stop()
+		<-timer.C
+		c.quicMu.Lock()
+		c.quicScheduled = false
+		c.quicMu.Unlock()
+		c.warmQUIC()
 	}()
 }
 
@@ -84,7 +119,7 @@ func (c *TunnelClient) openQUIC(ctx context.Context, command byte, target string
 	}
 	if response[0] != 0 {
 		_ = stream.Close()
-		return nil, fmt.Errorf("QUIC tunnel server rejected target (code %d)", response[0])
+		return nil, &tunnelRejectedError{code: response[0]}
 	}
 	_ = streamConn.SetDeadline(time.Time{})
 	return streamConn, nil
@@ -119,11 +154,7 @@ func (c *TunnelClient) quicConnection(ctx context.Context) (*quic.Conn, error) {
 			return certificate.VerifyHostname(c.cover.host)
 		},
 		NextProtos: []string{ixaQUICALPN},
-	}, &quic.Config{
-		HandshakeIdleTimeout: tunnelDialTimeout,
-		MaxIdleTimeout:       2 * time.Minute,
-		KeepAlivePeriod:      20 * time.Second,
-	})
+	}, braveQUICClientConfig())
 	if err != nil {
 		packetConn.Close()
 		return nil, err
@@ -163,7 +194,7 @@ func (s *TunnelServer) serveQUIC(ctx context.Context, packetConn *net.UDPConn) e
 		NextProtos:   []string{ixaQUICALPN},
 	}, &quic.Config{
 		HandshakeIdleTimeout: tunnelDialTimeout,
-		MaxIdleTimeout:       2 * time.Minute,
+		MaxIdleTimeout:       30 * time.Second,
 		KeepAlivePeriod:      20 * time.Second,
 	})
 	if err != nil {
@@ -189,6 +220,44 @@ func (s *TunnelServer) serveQUIC(ctx context.Context, packetConn *net.UDPConn) e
 	}
 }
 
+func braveQUICClientConfig() *quic.Config {
+	return &quic.Config{
+		HandshakeIdleTimeout:                tunnelDialTimeout,
+		MaxIdleTimeout:                      30 * time.Second,
+		InitialStreamReceiveWindow:          braveStreamWindow,
+		MaxStreamReceiveWindow:              braveStreamWindow,
+		InitialConnectionReceiveWindow:      braveConnectionWindow,
+		MaxConnectionReceiveWindow:          braveConnectionWindow,
+		MaxIncomingStreams:                  100,
+		MaxIncomingUniStreams:               103,
+		KeepAlivePeriod:                     20 * time.Second,
+		InitialPacketSize:                   1250,
+		EnableDatagrams:                     true,
+		UseChromeClientHello:                true,
+		AdditionalClientTransportParameters: braveQUICTransportParameters(),
+	}
+}
+
+func braveQUICTransportParameters() []quic.TransportParameter {
+	var random [4]byte
+	if _, err := rand.Read(random[:]); err != nil {
+		// A GREASE version is deliberately unusable. Falling back to a fixed
+		// reserved value is therefore safe if the system RNG is unavailable.
+		random = [4]byte{0x7a, 0x2a, 0x9a, 0x8a}
+	}
+	for i := range random {
+		random[i] = random[i]&0xf0 | 0x0a
+	}
+	versionInformation := make([]byte, 12)
+	binary.BigEndian.PutUint32(versionInformation[0:4], 1)
+	copy(versionInformation[4:8], random[:])
+	binary.BigEndian.PutUint32(versionInformation[8:12], 1)
+	return []quic.TransportParameter{
+		{ID: 0x11, Value: versionInformation},
+		{ID: 0x3128, Value: []byte("ORIG")},
+	}
+}
+
 func (s *TunnelServer) handleQUICConnection(ctx context.Context, connection *quic.Conn) {
 	if err := initializeHTTP3Facade(ctx, connection); err != nil {
 		_ = connection.CloseWithError(1, "HTTP/3 initialization failed")
@@ -201,10 +270,10 @@ func (s *TunnelServer) handleQUICConnection(ctx context.Context, connection *qui
 		}
 		go func() {
 			conn := &quicStreamConn{Stream: stream, connection: connection}
+			defer stream.Close()
 			if err := s.handle(ctx, conn); err != nil && ctx.Err() == nil {
 				log.Printf("ixa QUIC stream %s: %v", connection.RemoteAddr(), err)
 				stream.CancelRead(1)
-				stream.CancelWrite(1)
 			}
 		}()
 	}
@@ -218,8 +287,6 @@ func initializeHTTP3Facade(ctx context.Context, connection *quic.Conn) error {
 	if err != nil {
 		return err
 	}
-	// stream type 0x00, SETTINGS frame 0x04, setting
-	// SETTINGS_ENABLE_CONNECT_PROTOCOL (0x08) = 1.
 	settings := quicvarint.Append(nil, 0)
 	settings = quicvarint.Append(settings, 4)
 	settingsPayload := quicvarint.Append(nil, 8)

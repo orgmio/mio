@@ -79,6 +79,7 @@ type TunnelClient struct {
 	quicConn       *quic.Conn
 	quicPacketConn net.PacketConn
 	quicWarming    bool
+	quicScheduled  bool
 }
 
 func NewTunnelClient(config PeerConfig) (*TunnelClient, error) {
@@ -135,11 +136,18 @@ func (c *TunnelClient) openTunnel(ctx context.Context, command byte, target stri
 		if conn, err := c.openQUIC(ctx, command, target); err == nil {
 			return conn, nil
 		} else {
+			var rejected *tunnelRejectedError
+			if errors.As(err, &rejected) {
+				return nil, err
+			}
 			log.Printf("QUIC stream unavailable for %s, falling back to TCP: %v", target, err)
 		}
 	}
-	c.warmQUIC()
-	return c.openTCPTunnel(ctx, command, target)
+	conn, err := c.openTCPTunnel(ctx, command, target)
+	if err == nil {
+		c.scheduleQUICWarmup()
+	}
+	return conn, err
 }
 
 func (c *TunnelClient) openTCPTunnel(ctx context.Context, command byte, target string) (net.Conn, error) {
@@ -165,6 +173,11 @@ func (c *TunnelClient) openTCPTunnel(ctx context.Context, command byte, target s
 		return nil, fmt.Errorf("build Chrome ClientHello: %w", err)
 	}
 	tlsConn.HandshakeState.Hello.Random = append([]byte(nil), authRandom...)
+	applyBrave151SignatureAlgorithms(tlsConn)
+	if err := tlsConn.BuildHandshakeState(); err != nil {
+		raw.Close()
+		return nil, fmt.Errorf("build Brave 1.93 ClientHello: %w", err)
+	}
 	deadline, ok := ctx.Deadline()
 	if !ok {
 		deadline = time.Now().Add(tunnelDialTimeout)
@@ -197,6 +210,29 @@ func (c *TunnelClient) openTCPTunnel(ctx context.Context, command byte, target s
 	}
 	_ = tlsConn.SetDeadline(time.Time{})
 	return newVisionConn(tlsConn), nil
+}
+
+func applyBrave151SignatureAlgorithms(conn *tlsfork.UConn) {
+	algorithms := []tlsfork.SignatureScheme{
+		tlsfork.SignatureScheme(0x0904), // ML-DSA-44
+		tlsfork.SignatureScheme(0x0905), // ML-DSA-65
+		tlsfork.SignatureScheme(0x0906), // ML-DSA-87
+		tlsfork.ECDSAWithP256AndSHA256,
+		tlsfork.PSSWithSHA256,
+		tlsfork.PKCS1WithSHA256,
+		tlsfork.ECDSAWithP384AndSHA384,
+		tlsfork.PSSWithSHA384,
+		tlsfork.PKCS1WithSHA384,
+		tlsfork.PSSWithSHA512,
+		tlsfork.PKCS1WithSHA512,
+	}
+	for _, extension := range conn.Extensions {
+		if signatureAlgorithms, ok := extension.(*tlsfork.SignatureAlgorithmsExtension); ok {
+			signatureAlgorithms.SupportedSignatureAlgorithms = append([]tlsfork.SignatureScheme(nil), algorithms...)
+			break
+		}
+	}
+	conn.HandshakeState.Hello.SupportedSignatureAlgorithms = append([]tlsfork.SignatureScheme(nil), algorithms...)
 }
 
 type TunnelServer struct {
@@ -752,6 +788,10 @@ func ephemeralCertificate(serverName string) (tls.Certificate, error) {
 		return tls.Certificate{}, err
 	}
 	now := time.Now()
+	coverPadding := make([]byte, 420)
+	if _, err := rand.Read(coverPadding); err != nil {
+		return tls.Certificate{}, err
+	}
 	template := x509.Certificate{
 		SerialNumber: serial,
 		Subject:      pkix.Name{CommonName: serverName},
@@ -760,6 +800,11 @@ func ephemeralCertificate(serverName string) (tls.Certificate, error) {
 		NotAfter:     now.Add(24 * time.Hour),
 		KeyUsage:     x509.KeyUsageDigitalSignature,
 		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		ExtraExtensions: []pkix.Extension{{
+			Id:       []int{1, 3, 6, 1, 4, 1, 55555, 1},
+			Critical: false,
+			Value:    coverPadding,
+		}},
 	}
 	der, err := x509.CreateCertificate(rand.Reader, &template, &template, &privateKey.PublicKey, privateKey)
 	if err != nil {
