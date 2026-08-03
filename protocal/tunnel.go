@@ -78,6 +78,9 @@ type TunnelClient struct {
 	quicMu         sync.Mutex
 	quicConn       *quic.Conn
 	quicPacketConn net.PacketConn
+	quicDialing    bool
+	quicDialDone   chan struct{}
+	quicDialErr    error
 	quicWarming    bool
 	quicScheduled  bool
 }

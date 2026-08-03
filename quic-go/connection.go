@@ -473,6 +473,7 @@ var newClientConnection = func(
 		EnableResetStreamAt:       conf.EnableStreamResetPartialDelivery,
 	}
 	params.UseChromeClientHello = conf.UseChromeClientHello
+	s.initialStream.braveLayout = conf.UseChromeClientHello
 	if conf.UseChromeClientHello {
 		params.MaxAckDelay = protocol.DefaultMaxAckDelay
 		params.MaxUDPPayloadSize = 1472

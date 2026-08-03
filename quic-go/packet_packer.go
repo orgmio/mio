@@ -562,6 +562,17 @@ func (p *packetPacker) maybeGetCryptoPacket(
 		}
 		return hdr, pl
 	} else {
+		if encLevel == protocol.EncryptionInitial {
+			for _, frame := range p.initialStream.bravePrefixFrames() {
+				frameLen := frame.Length(v)
+				if frameLen > maxPacketSize {
+					break
+				}
+				pl.frames = append(pl.frames, ackhandler.Frame{Frame: frame, Handler: emptyHandler{}})
+				pl.length += frameLen
+				maxPacketSize -= frameLen
+			}
+		}
 		for hasCryptoData() {
 			cf := popCryptoFrame(maxPacketSize)
 			if cf == nil {
@@ -570,6 +581,17 @@ func (p *packetPacker) maybeGetCryptoPacket(
 			pl.frames = append(pl.frames, ackhandler.Frame{Frame: cf, Handler: handler})
 			pl.length += cf.Length(v)
 			maxPacketSize -= cf.Length(v)
+			if encLevel == protocol.EncryptionInitial {
+				for _, frame := range p.initialStream.braveSuffixFrames() {
+					frameLen := frame.Length(v)
+					if frameLen > maxPacketSize {
+						break
+					}
+					pl.frames = append(pl.frames, ackhandler.Frame{Frame: frame, Handler: emptyHandler{}})
+					pl.length += frameLen
+					maxPacketSize -= frameLen
+				}
+			}
 		}
 	}
 	return hdr, pl
@@ -837,6 +859,13 @@ func (p *packetPacker) PackPathProbePacket(connID protocol.ConnectionID, frames 
 
 func (p *packetPacker) getLongHeader(encLevel protocol.EncryptionLevel, v protocol.Version) *wire.ExtendedHeader {
 	pn, pnLen := p.pnManager.PeekPacketNumber(encLevel)
+	if encLevel == protocol.EncryptionInitial && p.initialStream.braveLayout {
+		if pn == 1 {
+			pnLen = protocol.PacketNumberLen1
+		} else {
+			pnLen = protocol.PacketNumberLen2
+		}
+	}
 	hdr := &wire.ExtendedHeader{
 		PacketNumber:    pn,
 		PacketNumberLen: pnLen,

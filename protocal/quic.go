@@ -126,18 +126,69 @@ func (c *TunnelClient) openQUIC(ctx context.Context, command byte, target string
 }
 
 func (c *TunnelClient) quicConnection(ctx context.Context) (*quic.Conn, error) {
-	c.quicMu.Lock()
-	defer c.quicMu.Unlock()
-	if c.quicConn != nil && c.quicConn.Context().Err() == nil {
-		return c.quicConn, nil
+	for {
+		c.quicMu.Lock()
+		if c.quicConn != nil && c.quicConn.Context().Err() == nil {
+			connection := c.quicConn
+			c.quicMu.Unlock()
+			return connection, nil
+		}
+		if c.quicDialing {
+			done := c.quicDialDone
+			c.quicMu.Unlock()
+			select {
+			case <-done:
+				c.quicMu.Lock()
+				err := c.quicDialErr
+				c.quicMu.Unlock()
+				if err != nil {
+					return nil, err
+				}
+				continue
+			case <-ctx.Done():
+				return nil, context.Cause(ctx)
+			}
+		}
+		staleConnection := c.quicConn
+		stalePacketConn := c.quicPacketConn
+		c.quicConn = nil
+		c.quicPacketConn = nil
+		c.quicDialing = true
+		c.quicDialDone = make(chan struct{})
+		c.quicDialErr = nil
+		c.quicMu.Unlock()
+
+		if staleConnection != nil {
+			_ = staleConnection.CloseWithError(1, "reconnect")
+		}
+		if stalePacketConn != nil {
+			_ = stalePacketConn.Close()
+		}
+
+		connection, packetConn, err := c.dialQUIC(ctx)
+		c.quicMu.Lock()
+		if err == nil {
+			c.quicConn = connection
+			c.quicPacketConn = packetConn
+		}
+		c.quicDialErr = err
+		c.quicDialing = false
+		close(c.quicDialDone)
+		c.quicMu.Unlock()
+		return connection, err
 	}
+}
+
+// dialQUIC performs network and TLS work without holding quicMu. This keeps
+// concurrent SOCKS requests free to take the TCP fallback while QUIC warms up.
+func (c *TunnelClient) dialQUIC(ctx context.Context) (*quic.Conn, net.PacketConn, error) {
 	udpAddress, err := net.ResolveUDPAddr("udp", c.config.Address())
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	packetConn, err := net.ListenUDP("udp", nil)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	connection, err := quic.Dial(ctx, packetConn, udpAddress, &tls.Config{
 		MinVersion:         tls.VersionTLS13,
@@ -157,16 +208,14 @@ func (c *TunnelClient) quicConnection(ctx context.Context) (*quic.Conn, error) {
 	}, braveQUICClientConfig())
 	if err != nil {
 		packetConn.Close()
-		return nil, err
+		return nil, nil, err
 	}
 	if err := initializeHTTP3Facade(ctx, connection); err != nil {
 		_ = connection.CloseWithError(1, "HTTP/3 initialization failed")
 		packetConn.Close()
-		return nil, err
+		return nil, nil, err
 	}
-	c.quicConn = connection
-	c.quicPacketConn = packetConn
-	return connection, nil
+	return connection, packetConn, nil
 }
 
 func (c *TunnelClient) dropQUIC(connection *quic.Conn) {

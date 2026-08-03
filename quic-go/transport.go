@@ -274,6 +274,9 @@ func (t *Transport) doDial(
 	use0RTT bool,
 	version protocol.Version,
 ) (*Conn, error) {
+	if config.UseChromeClientHello && initialPacketNumber == 0 {
+		initialPacketNumber = 1
+	}
 	srcConnID, err := t.connIDGenerator.GenerateConnectionID()
 	if err != nil {
 		return nil, err

@@ -106,9 +106,20 @@ type clientHelloCut struct {
 type initialCryptoStream struct {
 	baseCryptoStream
 
-	scramble bool
-	end      protocol.ByteCount
-	cuts     [2]clientHelloCut
+	scramble          bool
+	braveLayout       bool
+	braveSegmentIndex int
+	bravePause        bool
+	end               protocol.ByteCount
+	cuts              [2]clientHelloCut
+}
+
+var braveClientHelloSegments = [...]clientHelloCut{
+	{start: 18, end: 61}, {start: 66, end: 69}, {start: 0, end: 18}, {start: 62, end: 63},
+	{start: 965, end: 1787}, {start: 65, end: 66}, {start: 63, end: 65}, {start: 61, end: 62},
+	{start: 921, end: 965}, {start: 452, end: 858}, {start: 449, end: 452}, {start: 69, end: 424},
+	{start: 426, end: 430}, {start: 424, end: 426}, {start: 907, end: 921}, {start: 430, end: 432},
+	{start: 858, end: 907}, {start: 432, end: 449},
 }
 
 func newInitialCryptoStream(isClient bool) *initialCryptoStream {
@@ -131,7 +142,7 @@ func newInitialCryptoStream(isClient bool) *initialCryptoStream {
 func (s *initialCryptoStream) HasData() bool {
 	// The ClientHello might be written in multiple parts.
 	// In order to correctly split the ClientHello, we need the entire ClientHello has been queued.
-	if s.scramble && s.writeOffset == 0 && s.cuts[0].start == protocol.InvalidByteCount {
+	if s.scramble && s.writeOffset == 0 && s.end == 0 {
 		return false
 	}
 	return s.baseCryptoStream.HasData()
@@ -157,6 +168,9 @@ func (s *initialCryptoStream) Write(p []byte) (int, error) {
 			return len(p), nil
 		}
 		s.end = protocol.ByteCount(len(s.writeBuf))
+		if s.braveLayout && s.end == 1787 {
+			return len(p), nil
+		}
 		s.cuts[0].start = protocol.ByteCount(sniPos + sniLen/2) // right in the middle
 		s.cuts[0].end = protocol.ByteCount(sniPos + sniLen)
 		if echPos > 0 {
@@ -182,6 +196,9 @@ func (s *initialCryptoStream) Write(p []byte) (int, error) {
 func (s *initialCryptoStream) PopCryptoFrame(maxLen protocol.ByteCount) *wire.CryptoFrame {
 	if !s.scramble {
 		return s.baseCryptoStream.PopCryptoFrame(maxLen)
+	}
+	if s.braveLayout && s.end == 1787 {
+		return s.popBraveCryptoFrame(maxLen)
 	}
 
 	// send out the skipped parts
@@ -246,4 +263,71 @@ func (s *initialCryptoStream) PopCryptoFrame(maxLen protocol.ByteCount) *wire.Cr
 	}
 
 	return f
+}
+
+func (s *initialCryptoStream) popBraveCryptoFrame(maxLen protocol.ByteCount) *wire.CryptoFrame {
+	if s.bravePause {
+		s.bravePause = false
+		return nil
+	}
+	if s.braveSegmentIndex >= len(braveClientHelloSegments) {
+		return nil
+	}
+	segment := braveClientHelloSegments[s.braveSegmentIndex]
+	f := &wire.CryptoFrame{Offset: segment.start, Data: s.writeBuf[segment.start:segment.end]}
+	if f.Length(protocol.Version1) > maxLen {
+		return nil
+	}
+	s.braveSegmentIndex++
+	if s.braveSegmentIndex == 8 {
+		s.bravePause = true
+	}
+	if s.braveSegmentIndex == len(braveClientHelloSegments) {
+		s.writeBuf = s.writeBuf[s.end:]
+		s.writeOffset = s.end
+		s.scramble = false
+	}
+	return f
+}
+
+func (s *initialCryptoStream) bravePrefixFrames() []wire.Frame {
+	if !s.braveLayout || s.end != 1787 {
+		return nil
+	}
+	switch s.braveSegmentIndex {
+	case 0:
+		return []wire.Frame{wire.PaddingFrame(6)}
+	case 8:
+		return []wire.Frame{wire.PaddingFrame(2), &wire.PingFrame{}}
+	default:
+		return nil
+	}
+}
+
+func (s *initialCryptoStream) braveSuffixFrames() []wire.Frame {
+	if !s.braveLayout || s.end != 1787 {
+		return nil
+	}
+	switch s.braveSegmentIndex {
+	case 4:
+		return []wire.Frame{&wire.PingFrame{}}
+	case 5:
+		return []wire.Frame{wire.PaddingFrame(5), &wire.PingFrame{}}
+	case 6:
+		return []wire.Frame{wire.PaddingFrame(8)}
+	case 8:
+		return []wire.Frame{wire.PaddingFrame(99), &wire.PingFrame{}, &wire.PingFrame{}}
+	case 10:
+		return []wire.Frame{wire.PaddingFrame(11)}
+	case 11:
+		return []wire.Frame{wire.PaddingFrame(1)}
+	case 14:
+		return []wire.Frame{wire.PaddingFrame(75)}
+	case 15:
+		return []wire.Frame{&wire.PingFrame{}}
+	case 17:
+		return []wire.Frame{wire.PaddingFrame(26)}
+	default:
+		return nil
+	}
 }
