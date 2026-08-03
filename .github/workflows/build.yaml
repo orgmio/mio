@@ -52,8 +52,8 @@ jobs:
         shell: bash
         run: |
           mv go.mod.backup go.mod
-          ${{ matrix.tag }} go build
-          mv ./ixa-go* ./ixa-go-${{ matrix.dickname }}
+          ${{ matrix.tag }} go build -o ./ixa-go-${{ matrix.dickname }}
+          mv ./ixa-go* ./ixa-go-$
 
       - name: Release
         uses: softprops/action-gh-release@master
