@@ -31,6 +31,29 @@
 curl --socks5-hostname 127.0.0.1:2080 https://example.com
 ```
 
+作为systemd服务
+```bash
+mkdir /etc/ixa
+chmod 755 /etc/ixa/*
+cat <<'EOF'> /usr/lib/systemd/system/ixa-go.service
+[Unit]
+Description=ixa-go service
+Documentation=https://867678.xyz/project/ixa-go
+After=network.target nss-lookup.target network-online.target
+[Service]
+Type=simple
+WorkingDirectory=/etc/ixa
+ExecStart=/usr/bin/ixa-go server -c /etc/ixa/config.toml
+Restart=on-failure
+[Install]
+WantedBy=multi-user.target
+EOF
+systemctl daemon-reload
+systemctl start ixa-go
+systemctl status ixa-go # 显示running即为成功
+systemctl enable ixa-go # 可选 开机自启动
+```
+
 ## 📄 配置文件
 
 `sni`字段必须是一个支持TLS1.3的HTTPS URL，因为需要偷他的证书(没错这是类Reality);端口可以任意。
