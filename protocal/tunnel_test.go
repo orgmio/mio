@@ -7,6 +7,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/binary"
+	"errors"
 	"io"
 	"net"
 	"strings"
@@ -161,30 +162,38 @@ func TestUDPExchangePreservesDatagram(t *testing.T) {
 	go func() {
 		done <- exchangeUDP(tunnelServer, upstreamServer, "dns.example:53")
 	}()
-	payload := []byte("udp query")
-	request := binary.BigEndian.AppendUint16(nil, uint16(len(payload)))
-	request = append(request, payload...)
+	payloads := [][]byte{[]byte("udp query one"), []byte("udp query two")}
 	go func() {
-		buffer := make([]byte, len(payload))
-		_, _ = io.ReadFull(upstreamPeer, buffer)
-		_, _ = upstreamPeer.Write([]byte("udp response"))
+		for _, payload := range payloads {
+			buffer := make([]byte, len(payload))
+			_, _ = io.ReadFull(upstreamPeer, buffer)
+			_, _ = upstreamPeer.Write(append([]byte("response:"), buffer...))
+		}
 	}()
-	if _, err := tunnelClient.Write(request); err != nil {
-		t.Fatal(err)
+	for _, payload := range payloads {
+		request := binary.BigEndian.AppendUint16(nil, uint16(len(payload)))
+		request = append(request, payload...)
+		if _, err := tunnelClient.Write(request); err != nil {
+			t.Fatal(err)
+		}
+		length := make([]byte, 2)
+		if _, err := io.ReadFull(tunnelClient, length); err != nil {
+			t.Fatal(err)
+		}
+		response := make([]byte, int(binary.BigEndian.Uint16(length)))
+		if _, err := io.ReadFull(tunnelClient, response); err != nil {
+			t.Fatal(err)
+		}
+		want := append([]byte("response:"), payload...)
+		if !bytes.Equal(response, want) {
+			t.Fatalf("response = %q, want %q", response, want)
+		}
 	}
-	length := make([]byte, 2)
-	if _, err := io.ReadFull(tunnelClient, length); err != nil {
-		t.Fatal(err)
-	}
-	response := make([]byte, int(binary.BigEndian.Uint16(length)))
-	if _, err := io.ReadFull(tunnelClient, response); err != nil {
-		t.Fatal(err)
-	}
-	if string(response) != "udp response" {
-		t.Fatalf("response = %q", response)
-	}
+	_ = tunnelClient.Close()
 	if err := <-done; err != nil {
-		t.Fatal(err)
+		if !errors.Is(err, io.EOF) {
+			t.Fatal(err)
+		}
 	}
 }
 

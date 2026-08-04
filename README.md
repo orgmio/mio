@@ -33,8 +33,9 @@ chmod 755 /etc/ixa/*
 
 ```bash
 ./ixa-go -c example-client.toml
-curl --socks5-hostname 127.0.0.1:2080 https://example.com
 ```
+
+如果配置文件叫做`config.toml`那么可以直接执行二进制文件
 
 作为systemd服务
 ```bash
@@ -93,6 +94,8 @@ openssl rand -hex 32
 | 64 | 刚好卡在HMAC的临界点 超过就会被SHA256压缩成32字节 没意义 |
 
 `sni`字段必须是一个支持TLS1.3的HTTPS URL，因为需要偷他的证书(没错这是类Reality);端口可以任意。
+
+开发使用的配置文件可以在项目根目录新建一个叫做`config.toml`的配置文件，caddy可以直接放在`caddy-real/`目录 Git已忽略他们
 
 ## 🏃 协议行为
 

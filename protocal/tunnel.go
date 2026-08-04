@@ -85,6 +85,16 @@ type TunnelClient struct {
 	quicWarming    bool
 	quicScheduled  bool
 	h3Transport    *http3.Transport
+	udpMu          sync.Mutex
+	udpSessions    map[string]*udpTunnelSession
+}
+
+// udpTunnelSession keeps the outer tunnel and the server-side UDP socket alive
+// across datagrams. The mutex preserves datagram / response pairing for the
+// request-response net.Conn API used by the SOCKS5 package.
+type udpTunnelSession struct {
+	conn net.Conn
+	mu   sync.Mutex
 }
 
 func NewTunnelClient(config PeerConfig) (*TunnelClient, error) {
@@ -97,10 +107,11 @@ func NewTunnelClient(config PeerConfig) (*TunnelClient, error) {
 		return nil, fmt.Errorf("invalid peer.sni: %w", err)
 	}
 	return &TunnelClient{
-		config: config,
-		key:    key,
-		cover:  cover,
-		dialer: net.Dialer{Timeout: tunnelDialTimeout, KeepAlive: 30 * time.Second},
+		config:      config,
+		key:         key,
+		cover:       cover,
+		dialer:      net.Dialer{Timeout: tunnelDialTimeout, KeepAlive: 30 * time.Second},
+		udpSessions: make(map[string]*udpTunnelSession),
 	}, nil
 }
 
@@ -115,25 +126,63 @@ func (c *TunnelClient) ExchangeUDP(ctx context.Context, target string, payload [
 	if len(payload) > maxUDPPayload {
 		return nil, fmt.Errorf("UDP payload exceeds %d bytes", maxUDPPayload)
 	}
-	conn, err := c.openTunnel(ctx, tunnelCommandUDP, target)
+	session, err := c.udpSession(ctx, target)
 	if err != nil {
 		return nil, err
 	}
-	defer conn.Close()
+	session.mu.Lock()
+	defer session.mu.Unlock()
+	conn := session.conn
 	packet := binary.BigEndian.AppendUint16(nil, uint16(len(payload)))
 	packet = append(packet, payload...)
 	if _, err := conn.Write(packet); err != nil {
+		c.dropUDPSession(target, session)
 		return nil, err
 	}
 	lengthBytes := make([]byte, 2)
 	if _, err := io.ReadFull(conn, lengthBytes); err != nil {
+		c.dropUDPSession(target, session)
 		return nil, err
 	}
 	response := make([]byte, int(binary.BigEndian.Uint16(lengthBytes)))
 	if _, err := io.ReadFull(conn, response); err != nil {
+		c.dropUDPSession(target, session)
 		return nil, err
 	}
 	return response, nil
+}
+
+func (c *TunnelClient) udpSession(ctx context.Context, target string) (*udpTunnelSession, error) {
+	c.udpMu.Lock()
+	if session := c.udpSessions[target]; session != nil {
+		c.udpMu.Unlock()
+		return session, nil
+	}
+	c.udpMu.Unlock()
+
+	conn, err := c.openTunnel(ctx, tunnelCommandUDP, target)
+	if err != nil {
+		return nil, err
+	}
+	session := &udpTunnelSession{conn: conn}
+	c.udpMu.Lock()
+	if existing := c.udpSessions[target]; existing != nil {
+		c.udpMu.Unlock()
+		_ = conn.Close()
+		return existing, nil
+	}
+	c.udpSessions[target] = session
+	c.udpMu.Unlock()
+	return session, nil
+}
+
+func (c *TunnelClient) dropUDPSession(target string, expected *udpTunnelSession) {
+	c.udpMu.Lock()
+	if c.udpSessions[target] == expected {
+		delete(c.udpSessions, target)
+		_ = expected.conn.Close()
+	}
+	c.udpMu.Unlock()
 }
 
 func (c *TunnelClient) openTunnel(ctx context.Context, command byte, target string) (net.Conn, error) {
@@ -527,27 +576,30 @@ func readTunnelRequest(r io.Reader, key []byte, now time.Time) (byte, string, er
 
 func exchangeUDP(tunnel, upstream net.Conn, target string) error {
 	lengthBytes := make([]byte, 2)
-	if _, err := io.ReadFull(tunnel, lengthBytes); err != nil {
-		return err
-	}
-	length := int(binary.BigEndian.Uint16(lengthBytes))
-	payload := make([]byte, length)
-	if _, err := io.ReadFull(tunnel, payload); err != nil {
-		return err
-	}
-	_ = upstream.SetDeadline(time.Now().Add(tunnelDialTimeout))
-	if _, err := upstream.Write(payload); err != nil {
-		return fmt.Errorf("send UDP to %s: %w", target, err)
-	}
 	response := make([]byte, maxUDPPayload)
-	n, err := upstream.Read(response)
-	if err != nil {
-		return fmt.Errorf("receive UDP from %s: %w", target, err)
+	for {
+		if _, err := io.ReadFull(tunnel, lengthBytes); err != nil {
+			return err
+		}
+		length := int(binary.BigEndian.Uint16(lengthBytes))
+		payload := make([]byte, length)
+		if _, err := io.ReadFull(tunnel, payload); err != nil {
+			return err
+		}
+		_ = upstream.SetDeadline(time.Now().Add(tunnelDialTimeout))
+		if _, err := upstream.Write(payload); err != nil {
+			return fmt.Errorf("send UDP to %s: %w", target, err)
+		}
+		n, err := upstream.Read(response)
+		if err != nil {
+			return fmt.Errorf("receive UDP from %s: %w", target, err)
+		}
+		packet := binary.BigEndian.AppendUint16(nil, uint16(n))
+		packet = append(packet, response[:n]...)
+		if _, err := tunnel.Write(packet); err != nil {
+			return err
+		}
 	}
-	packet := binary.BigEndian.AppendUint16(nil, uint16(n))
-	packet = append(packet, response[:n]...)
-	_, err = tunnel.Write(packet)
-	return err
 }
 
 func decodeKey(value string) ([]byte, error) {

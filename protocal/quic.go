@@ -312,9 +312,16 @@ func (s *TunnelServer) serveQUIC(ctx context.Context, packetConn *net.UDPConn) e
 		Certificates: []tls.Certificate{certificate},
 		NextProtos:   []string{ixaQUICALPN},
 	}, &quic.Config{
-		HandshakeIdleTimeout: tunnelDialTimeout,
-		MaxIdleTimeout:       30 * time.Second,
-		KeepAlivePeriod:      20 * time.Second,
+		HandshakeIdleTimeout:           tunnelDialTimeout,
+		MaxIdleTimeout:                 30 * time.Second,
+		InitialStreamReceiveWindow:     braveStreamWindow,
+		MaxStreamReceiveWindow:         braveStreamWindow,
+		InitialConnectionReceiveWindow: braveConnectionWindow,
+		MaxConnectionReceiveWindow:     braveConnectionWindow,
+		MaxIncomingStreams:             100,
+		MaxIncomingUniStreams:          103,
+		KeepAlivePeriod:                20 * time.Second,
+		EnableDatagrams:                true,
 	})
 	if err != nil {
 		return err
@@ -431,18 +438,23 @@ func (s *TunnelServer) reverseProxyHTTP3() http.Handler {
 }
 
 type http3ServerConn struct {
-	reader  io.Reader
-	writer  io.Writer
-	request *http.Request
+	reader    io.Reader
+	writer    io.Writer
+	request   *http.Request
+	flushOnce sync.Once
 }
 
 func (*http3ServerConn) isQUICStream()                {}
 func (c *http3ServerConn) Read(p []byte) (int, error) { return c.reader.Read(p) }
 func (c *http3ServerConn) Write(p []byte) (int, error) {
 	n, err := c.writer.Write(p)
-	if f, ok := c.writer.(http.Flusher); ok {
-		f.Flush()
-	}
+	// The first write is the one-byte tunnel status and must reach the client
+	// before it starts relaying. Bulk payload writes should remain batchable.
+	c.flushOnce.Do(func() {
+		if flusher, ok := c.writer.(http.Flusher); ok {
+			flusher.Flush()
+		}
+	})
 	return n, err
 }
 func (*http3ServerConn) Close() error                     { return nil }
