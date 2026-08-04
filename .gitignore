@@ -10,7 +10,8 @@
 
 # Test binary, built with `go test -c`
 *.test
-caddy-file/caddy
+caddy-real/*.pcapng
+caddy-real/caddy
 ixa-go-*
 
 # Test config file
