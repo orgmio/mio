@@ -12,6 +12,16 @@
 ## 📚 项目文档
 
 ## ⚙️ 如何使用
+安装
+```bash
+cd /usr/bin
+wget -O ixa-go https://github.com/moaeiou/ixa-go/releases/latest/download/ixa-go-⚠️OS-⚠️archoptimize-⚠️LibC
+chmod +x ./ixa-go
+cd /etc/
+mkdir /etc/ixa
+touch /etc/ixa/config.toml
+chmod 755 /etc/ixa/*
+```
 
 启动服务端：
 
@@ -28,8 +38,6 @@ curl --socks5-hostname 127.0.0.1:2080 https://example.com
 
 作为systemd服务
 ```bash
-mkdir /etc/ixa
-chmod 755 /etc/ixa/*
 cat <<'EOF'> /usr/lib/systemd/system/ixa-go.service
 [Unit]
 Description=ixa-go service
@@ -48,6 +56,16 @@ systemctl start ixa-go
 systemctl status ixa-go # 显示running即为成功
 systemctl enable ixa-go # 可选 开机自启动
 ```
+
+更新
+```bash
+cd /usr/bin
+rm ./ixa-go
+wget -O ixa-go https://github.com/moaeiou/ixa-go/releases/latest/download/ixa-go-⚠️OS-⚠️archoptimize-⚠️LibC
+chmod +x ./ixa-go
+```
+
+需要手动重启一次服务
 
 ## 📄 配置文件
 
