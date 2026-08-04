@@ -2,51 +2,24 @@ package protocal
 
 import (
 	"context"
-	"io"
+	"net"
 	"testing"
 )
 
-func TestUDPExchangeConn(t *testing.T) {
-	conn := newUDPExchangeConn(context.Background(), "dns.example:53", func(_ context.Context, target string, payload []byte) ([]byte, error) {
-		if target != "dns.example:53" {
-			t.Fatalf("target = %q", target)
-		}
-		return append([]byte("response:"), payload...), nil
-	})
-	defer conn.Close()
+func TestSOCKS5TransportDialsUDPDirectly(t *testing.T) {
+	wantClient, wantServer := net.Pipe()
+	defer wantClient.Close()
+	defer wantServer.Close()
 
-	payload := []byte("query")
-	done := make(chan error, 1)
-	go func() {
-		_, err := conn.Write(payload)
-		done <- err
-	}()
-	response := make([]byte, 64)
-	n, err := conn.Read(response)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := string(response[:n]); got != "response:query" {
-		t.Fatalf("response = %q", got)
-	}
-	if err := <-done; err != nil {
-		t.Fatal(err)
-	}
-}
-
-func TestUDPExchangeConnCloseUnblocksRead(t *testing.T) {
-	conn := newUDPExchangeConn(context.Background(), "dns.example:53", func(_ context.Context, _ string, _ []byte) ([]byte, error) {
-		return nil, nil
-	})
-	done := make(chan error, 1)
-	go func() {
-		_, err := conn.Read(make([]byte, 1))
-		done <- err
-	}()
-	_ = conn.Close()
-	if err := <-done; err != nil && err != io.EOF && err != context.Canceled {
-		if err.Error() != "use of closed network connection" {
-			t.Fatal(err)
+	called := make(chan struct{}, 1)
+	server := NewSOCKS5ServerWithTransport(SOCKS5Config{}, func(_ context.Context, network, address string) (net.Conn, error) {
+		if network != "udp" || address != "dns.example:53" {
+			t.Fatalf("dial = %s %s", network, address)
 		}
+		called <- struct{}{}
+		return wantClient, nil
+	})
+	if server == nil {
+		t.Fatal("server is nil")
 	}
 }

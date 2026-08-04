@@ -164,10 +164,14 @@ func TestUDPExchangePreservesDatagram(t *testing.T) {
 	}()
 	payloads := [][]byte{[]byte("udp query one"), []byte("udp query two")}
 	go func() {
+		requests := make([][]byte, 0, len(payloads))
 		for _, payload := range payloads {
 			buffer := make([]byte, len(payload))
 			_, _ = io.ReadFull(upstreamPeer, buffer)
-			_, _ = upstreamPeer.Write(append([]byte("response:"), buffer...))
+			requests = append(requests, buffer)
+		}
+		for _, request := range requests {
+			_, _ = upstreamPeer.Write(append([]byte("response:"), request...))
 		}
 	}()
 	for _, payload := range payloads {
@@ -176,6 +180,8 @@ func TestUDPExchangePreservesDatagram(t *testing.T) {
 		if _, err := tunnelClient.Write(request); err != nil {
 			t.Fatal(err)
 		}
+	}
+	for _, payload := range payloads {
 		length := make([]byte, 2)
 		if _, err := io.ReadFull(tunnelClient, length); err != nil {
 			t.Fatal(err)
@@ -440,7 +446,7 @@ func TestChromeAuthenticatedTCPTunnel(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	conn, err := client.openTCPTunnel(ctx, tunnelCommandTCP, "example.com:443")
+	conn, err := client.openTCPMuxStream(ctx, tunnelCommandTCP, "example.com:443")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -456,6 +462,12 @@ func TestChromeAuthenticatedTCPTunnel(t *testing.T) {
 		t.Fatalf("TCP relay payload = %q", got)
 	}
 	_ = conn.Close()
+	client.tcpMuxMu.Lock()
+	muxSession := client.tcpMux
+	client.tcpMuxMu.Unlock()
+	if muxSession != nil {
+		client.dropTCPMux(muxSession)
+	}
 	if err := <-serverDone; err != nil {
 		t.Fatal(err)
 	}

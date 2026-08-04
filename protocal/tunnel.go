@@ -28,6 +28,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/hashicorp/yamux"
 	quic "github.com/quic-go/quic-go"
 	"github.com/quic-go/quic-go/http3"
 	tlsfork "github.com/refraction-networking/utls"
@@ -46,6 +47,7 @@ const (
 	maxClientHello    = 64 * 1024
 	tunnelCommandTCP  = 1
 	tunnelCommandUDP  = 3
+	tunnelCommandMux  = 4
 	maxUDPPayload     = 65507
 )
 
@@ -85,16 +87,8 @@ type TunnelClient struct {
 	quicWarming    bool
 	quicScheduled  bool
 	h3Transport    *http3.Transport
-	udpMu          sync.Mutex
-	udpSessions    map[string]*udpTunnelSession
-}
-
-// udpTunnelSession keeps the outer tunnel and the server-side UDP socket alive
-// across datagrams. The mutex preserves datagram / response pairing for the
-// request-response net.Conn API used by the SOCKS5 package.
-type udpTunnelSession struct {
-	conn net.Conn
-	mu   sync.Mutex
+	tcpMuxMu       sync.Mutex
+	tcpMux         *yamux.Session
 }
 
 func NewTunnelClient(config PeerConfig) (*TunnelClient, error) {
@@ -107,82 +101,65 @@ func NewTunnelClient(config PeerConfig) (*TunnelClient, error) {
 		return nil, fmt.Errorf("invalid peer.sni: %w", err)
 	}
 	return &TunnelClient{
-		config:      config,
-		key:         key,
-		cover:       cover,
-		dialer:      net.Dialer{Timeout: tunnelDialTimeout, KeepAlive: 30 * time.Second},
-		udpSessions: make(map[string]*udpTunnelSession),
+		config: config,
+		key:    key,
+		cover:  cover,
+		dialer: net.Dialer{Timeout: tunnelDialTimeout, KeepAlive: 30 * time.Second},
 	}, nil
 }
 
 func (c *TunnelClient) DialContext(ctx context.Context, network, target string) (net.Conn, error) {
-	if network != "tcp" {
-		return nil, fmt.Errorf("ixa POC only supports TCP, got %q", network)
+	switch network {
+	case "tcp":
+		return c.openTunnel(ctx, tunnelCommandTCP, target)
+	case "udp":
+		conn, err := c.openTunnel(ctx, tunnelCommandUDP, target)
+		if err != nil {
+			return nil, err
+		}
+		return newFramedUDPConn(conn), nil
+	default:
+		return nil, fmt.Errorf("ixa does not support network %q", network)
 	}
-	return c.openTunnel(ctx, tunnelCommandTCP, target)
 }
 
-func (c *TunnelClient) ExchangeUDP(ctx context.Context, target string, payload []byte) ([]byte, error) {
+type framedUDPConn struct {
+	net.Conn
+	readMu  sync.Mutex
+	writeMu sync.Mutex
+}
+
+func newFramedUDPConn(conn net.Conn) net.Conn { return &framedUDPConn{Conn: conn} }
+
+func (c *framedUDPConn) Write(payload []byte) (int, error) {
 	if len(payload) > maxUDPPayload {
-		return nil, fmt.Errorf("UDP payload exceeds %d bytes", maxUDPPayload)
+		return 0, fmt.Errorf("UDP payload exceeds %d bytes", maxUDPPayload)
 	}
-	session, err := c.udpSession(ctx, target)
-	if err != nil {
-		return nil, err
-	}
-	session.mu.Lock()
-	defer session.mu.Unlock()
-	conn := session.conn
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
 	packet := binary.BigEndian.AppendUint16(nil, uint16(len(payload)))
 	packet = append(packet, payload...)
-	if _, err := conn.Write(packet); err != nil {
-		c.dropUDPSession(target, session)
-		return nil, err
+	if err := writeAll(c.Conn, packet); err != nil {
+		return 0, err
 	}
-	lengthBytes := make([]byte, 2)
-	if _, err := io.ReadFull(conn, lengthBytes); err != nil {
-		c.dropUDPSession(target, session)
-		return nil, err
-	}
-	response := make([]byte, int(binary.BigEndian.Uint16(lengthBytes)))
-	if _, err := io.ReadFull(conn, response); err != nil {
-		c.dropUDPSession(target, session)
-		return nil, err
-	}
-	return response, nil
+	return len(payload), nil
 }
 
-func (c *TunnelClient) udpSession(ctx context.Context, target string) (*udpTunnelSession, error) {
-	c.udpMu.Lock()
-	if session := c.udpSessions[target]; session != nil {
-		c.udpMu.Unlock()
-		return session, nil
+func (c *framedUDPConn) Read(buffer []byte) (int, error) {
+	c.readMu.Lock()
+	defer c.readMu.Unlock()
+	var lengthBytes [2]byte
+	if _, err := io.ReadFull(c.Conn, lengthBytes[:]); err != nil {
+		return 0, err
 	}
-	c.udpMu.Unlock()
-
-	conn, err := c.openTunnel(ctx, tunnelCommandUDP, target)
-	if err != nil {
-		return nil, err
+	length := int(binary.BigEndian.Uint16(lengthBytes[:]))
+	if length > len(buffer) {
+		if _, err := io.CopyN(io.Discard, c.Conn, int64(length)); err != nil {
+			return 0, err
+		}
+		return 0, io.ErrShortBuffer
 	}
-	session := &udpTunnelSession{conn: conn}
-	c.udpMu.Lock()
-	if existing := c.udpSessions[target]; existing != nil {
-		c.udpMu.Unlock()
-		_ = conn.Close()
-		return existing, nil
-	}
-	c.udpSessions[target] = session
-	c.udpMu.Unlock()
-	return session, nil
-}
-
-func (c *TunnelClient) dropUDPSession(target string, expected *udpTunnelSession) {
-	c.udpMu.Lock()
-	if c.udpSessions[target] == expected {
-		delete(c.udpSessions, target)
-		_ = expected.conn.Close()
-	}
-	c.udpMu.Unlock()
+	return io.ReadFull(c.Conn, buffer[:length])
 }
 
 func (c *TunnelClient) openTunnel(ctx context.Context, command byte, target string) (net.Conn, error) {
@@ -197,7 +174,7 @@ func (c *TunnelClient) openTunnel(ctx context.Context, command byte, target stri
 			log.Printf("QUIC stream unavailable for %s, falling back to TCP: %v", target, err)
 		}
 	}
-	conn, err := c.openTCPTunnel(ctx, command, target)
+	conn, err := c.openTCPMuxStream(ctx, command, target)
 	if err == nil {
 		c.scheduleQUICWarmup()
 	}
@@ -209,6 +186,7 @@ func (c *TunnelClient) openTCPTunnel(ctx context.Context, command byte, target s
 	if err != nil {
 		return nil, err
 	}
+	preferTCPBBR(raw)
 	authRandom, err := makeAuthenticatedRandom(c.key, c.cover.host, time.Now())
 	if err != nil {
 		raw.Close()
@@ -263,7 +241,10 @@ func (c *TunnelClient) openTCPTunnel(ctx context.Context, command byte, target s
 		return nil, fmt.Errorf("tunnel server rejected target (code %d)", response[0])
 	}
 	_ = tlsConn.SetDeadline(time.Time{})
-	return newVisionConn(tlsConn), nil
+	if command == tunnelCommandTCP {
+		return newVisionConn(tlsConn), nil
+	}
+	return tlsConn, nil
 }
 
 func applyBrave151SignatureAlgorithms(conn *tlsfork.UConn) {
@@ -429,6 +410,7 @@ func (s *TunnelServer) ListenAndServe(ctx context.Context) error {
 			}
 			return err
 		}
+		preferTCPBBR(raw)
 		s.track(raw, true)
 		go func() {
 			defer s.track(raw, false)
@@ -480,6 +462,13 @@ func (s *TunnelServer) handle(ctx context.Context, client net.Conn) error {
 	command, target, err := readTunnelRequest(client, s.key, time.Now())
 	if err != nil {
 		return err
+	}
+	if command == tunnelCommandMux {
+		if _, err := client.Write([]byte{0}); err != nil {
+			return err
+		}
+		_ = client.SetDeadline(time.Time{})
+		return s.serveTCPMux(ctx, client)
 	}
 	network := "tcp"
 	if command == tunnelCommandUDP {
@@ -575,28 +564,34 @@ func readTunnelRequest(r io.Reader, key []byte, now time.Time) (byte, string, er
 }
 
 func exchangeUDP(tunnel, upstream net.Conn, target string) error {
-	lengthBytes := make([]byte, 2)
-	response := make([]byte, maxUDPPayload)
-	for {
-		if _, err := io.ReadFull(tunnel, lengthBytes); err != nil {
-			return err
-		}
-		length := int(binary.BigEndian.Uint16(lengthBytes))
-		payload := make([]byte, length)
-		if _, err := io.ReadFull(tunnel, payload); err != nil {
-			return err
-		}
-		_ = upstream.SetDeadline(time.Now().Add(tunnelDialTimeout))
-		if _, err := upstream.Write(payload); err != nil {
-			return fmt.Errorf("send UDP to %s: %w", target, err)
-		}
-		n, err := upstream.Read(response)
+	errors := make(chan error, 2)
+	go func() {
+		err := copyUDPDatagrams(upstream, newFramedUDPConn(tunnel))
 		if err != nil {
-			return fmt.Errorf("receive UDP from %s: %w", target, err)
+			err = fmt.Errorf("send UDP to %s: %w", target, err)
 		}
-		packet := binary.BigEndian.AppendUint16(nil, uint16(n))
-		packet = append(packet, response[:n]...)
-		if _, err := tunnel.Write(packet); err != nil {
+		errors <- err
+	}()
+	go func() {
+		err := copyUDPDatagrams(newFramedUDPConn(tunnel), upstream)
+		if err != nil {
+			err = fmt.Errorf("receive UDP from %s: %w", target, err)
+		}
+		errors <- err
+	}()
+	return <-errors
+}
+
+func copyUDPDatagrams(destination io.Writer, source io.Reader) error {
+	buffer := make([]byte, maxUDPPayload)
+	for {
+		n, err := source.Read(buffer)
+		if n > 0 {
+			if _, writeErr := destination.Write(buffer[:n]); writeErr != nil {
+				return writeErr
+			}
+		}
+		if err != nil {
 			return err
 		}
 	}

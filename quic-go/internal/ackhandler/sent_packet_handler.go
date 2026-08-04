@@ -134,7 +134,7 @@ func NewSentPacketHandler(
 		rttStats,
 		connStats,
 		initialMaxDatagramSize,
-		true, // use Reno
+		false, // use CUBIC until the BBR sender is installed
 		qlogger,
 	)
 
@@ -1136,7 +1136,7 @@ func (h *sentPacketHandler) MigratedPath(now monotime.Time, initialMaxDatagramSi
 		h.rttStats,
 		h.connStats,
 		initialMaxDatagramSize,
-		true, // use Reno
+		false, // use CUBIC until the BBR sender is installed
 		h.qlogger,
 	)
 	h.setLossDetectionTimer(now)

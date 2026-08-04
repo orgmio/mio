@@ -8,7 +8,7 @@
 *.so
 *.dylib
 
-# Test binary, built with `go test -c`
+# Test files, built with `go test -c`
 *.test
 caddy-real/*.pcapng
 caddy-real/caddy
