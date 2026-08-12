@@ -1,4 +1,4 @@
-module github.com/moaeiou/mio
+module github.com/orgmio/mio
 
 go 1.26.5
 

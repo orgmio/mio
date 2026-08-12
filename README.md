@@ -17,7 +17,7 @@
 
 ```bash
 cd /usr/bin
-wget -O mio https://github.com/moaeiou/mio/releases/latest/download/mio-⚠️OS-⚠️archoptimize-⚠️LibC(option)
+wget -O mio https://github.com/orgmio/mio/releases/latest/download/mio-⚠️OS-⚠️archoptimize-⚠️LibC(option)
 chmod +x ./mio
 cd /etc/
 mkdir -p /etc/mio
@@ -66,7 +66,7 @@ systemctl enable mio # 可选 开机自启动
 ```bash
 cd /usr/bin
 rm ./mio
-wget -O mio https://github.com/moaeiou/mio/releases/latest/download/mio-⚠️OS-⚠️archoptimize-⚠️LibC(Option)
+wget -O mio https://github.com/orgmio/mio/releases/latest/download/mio-⚠️OS-⚠️archoptimize-⚠️LibC(Option)
 chmod +x ./mio
 systemctl restart mio
 ```
@@ -83,7 +83,7 @@ systemctl restart mio
 sudo pacman -Syyuu --needed git wget
 git clone https://github.com/orgmio/mio.git
 cd mio
-wget -O mio-test https://github.com/moaeiou/mio/releases/latest/download/mio-⚠️OS-⚠️archoptimize-⚠️LibC(Option)
+wget -O mio-test https://github.com/orgmio/mio/releases/latest/download/mio-⚠️OS-⚠️archoptimize-⚠️LibC(Option)
 chmod +x ./mio-test
 cd caddy-real
 wget https://github.com/caddyserver/caddy/releases/download/v2.11.4/caddy_2.11.4_linux_amd64.tar.gz
@@ -95,12 +95,15 @@ cd ..
 
 测试真brave访问真caddy（需要开好几个窗口）
 
-
+需要确保你在项目根目录下且执行完毕初始化环境
 
 ```bash
 sudo pacman -Syyuu --needed brave-bin
 # 启动caddy
 cd caddy-real
+sudo ./caddy run
+# 开一个新窗口 如果是第一次
+
 ```
 
 ## ⚠️ 安全性警告

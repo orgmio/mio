@@ -5,7 +5,7 @@ import (
 	"net"
 	"testing"
 
-	mio "github.com/moaeiou/mio/protocol"
+	mio "github.com/orgmio/mio/protocol"
 )
 
 func TestSOCKS5TransportDialsUDPDirectly(t *testing.T) {

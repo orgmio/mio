@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"os"
 
-	mio "github.com/moaeiou/mio/protocol"
+	mio "github.com/orgmio/mio/protocol"
 	"github.com/pelletier/go-toml/v2"
 )
 

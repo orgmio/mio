@@ -8,7 +8,7 @@ import (
 	"os/signal"
 	"syscall"
 
-	mio "github.com/moaeiou/mio/protocol"
+	mio "github.com/orgmio/mio/protocol"
 )
 
 func Run(args []string) error {

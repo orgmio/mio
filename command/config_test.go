@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	mio "github.com/moaeiou/mio/protocol"
+	mio "github.com/orgmio/mio/protocol"
 )
 
 func TestLoadConfigRejectsUnknownField(t *testing.T) {

@@ -4,7 +4,7 @@ import (
 	"log"
 	"os"
 
-	"github.com/moaeiou/mio/command"
+	"github.com/orgmio/mio/command"
 )
 
 func main() {
