@@ -11,13 +11,13 @@
 
 ## 📚 项目文档
 
-## ⚙️ 如何使用
+### ⚙️ 如何使用
 
-安装
+安装（mio是通用的，也就是说他又可以是客户端又可以是服务端，具体请查看示例配置文件）
 
 ```bash
 cd /usr/bin
-wget -O mio https://github.com/orgmio/mio/releases/latest/download/mio-⚠️OS-⚠️archoptimize-⚠️LibC(option)
+wget -O mio https://github.com/moaeiou/mio/releases/latest/download/mio-⚠️OS-⚠️archoptimize-⚠️LibC(option)
 chmod +x ./mio
 cd /etc/
 mkdir -p /etc/mio
@@ -39,7 +39,7 @@ chmod 755 /etc/mio/*
 
 如果配置文件叫做`config.toml`那么可以直接执行二进制文件
 
-作为systemd服务
+### ⚙ 作为systemd服务运行
 
 ```bash
 cat <<'EOF'> /usr/lib/systemd/system/mio.service
@@ -61,21 +61,17 @@ systemctl status mio # 显示running即为成功
 systemctl enable mio # 可选 开机自启动
 ```
 
-更新
+### ⬆️ 更新
 
 ```bash
 cd /usr/bin
 rm ./mio
-wget -O mio https://github.com/orgmio/mio/releases/latest/download/mio-⚠️OS-⚠️archoptimize-⚠️LibC(Option)
+wget -O mio https://github.com/moaeiou/mio/releases/latest/download/mio-⚠️OS-⚠️archoptimize-⚠️LibC(Option)
 chmod +x ./mio
 systemctl restart mio
 ```
 
-## 📄 配置文件
-
-请直接参阅该项目的example.toml文件 里面包含了该项目所有能支持的字段
-
-## 🔩 开发
+### 🔩 开发
 
 初始化环境（假设你用archlinux）
 
@@ -83,7 +79,7 @@ systemctl restart mio
 sudo pacman -Syyuu --needed git wget
 git clone https://github.com/orgmio/mio.git
 cd mio
-wget -O mio-test https://github.com/orgmio/mio/releases/latest/download/mio-⚠️OS-⚠️archoptimize-⚠️LibC(Option)
+wget -O mio-test https://github.com/moaeiou/mio/releases/latest/download/mio-⚠️OS-⚠️archoptimize-⚠️LibC(Option)
 chmod +x ./mio-test
 cd caddy-real
 wget https://github.com/caddyserver/caddy/releases/download/v2.11.4/caddy_2.11.4_linux_amd64.tar.gz
@@ -98,13 +94,43 @@ cd ..
 需要确保你在项目根目录下且执行完毕初始化环境
 
 ```bash
-sudo pacman -Syyuu --needed brave-bin
+sudo pacman -Syyuu --needed brave-bin wireshark-qt
+echo "local.867678.xyz 127.0.0.1" >> /etc/hosts
 # 启动caddy
 cd caddy-real
 sudo ./caddy run
-# 开一个新窗口 如果是第一次
-
+# 如果是第一次跑，请打开一个新窗口下列命令
+sudo ./caddy trust
+# 启动brave
+mkdir -p /tmp/brave-guest
+brave --user-data-dir=/tmp/brave-guest
+# 启动wireshark抓包
+sudo wireshark
+# 过滤目标
+tls.handshake.extensions_server_name == "local.867678.xyz"
+# 访问 local.867678.xyz即可
 ```
+
+测试mio协议
+
+在客户端 mio项目根目录上：
+
+```bash
+touch config.toml
+# 在config.toml中写入你的客户端配置文件
+go run .
+```
+
+在服务端：
+
+```bash
+touch config.toml
+wget -O mio https://github.com/moaeiou/mio/releases/latest/download/mio-⚠️OS-⚠️archoptimize-⚠️LibC(Option)
+chmod +x ./mio
+./mio
+```
+
+抓包和过滤目标的方法与brave中的示例相同
 
 ## ⚠️ 安全性警告
 
