@@ -12,7 +12,7 @@
 *.test
 caddy-real/*.pcapng
 caddy-real/caddy
-mio*
+mio-*
 
 # Test config file
 config.toml
