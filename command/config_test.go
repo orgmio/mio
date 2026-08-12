@@ -10,7 +10,7 @@ import (
 )
 
 func TestLoadConfigRejectsUnknownField(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "ixa.toml")
+	path := filepath.Join(t.TempDir(), "mio.toml")
 	if err := os.WriteFile(path, []byte("[socks5]\nlisten='127.0.0.1'\nport=1080\ntyop=true\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}

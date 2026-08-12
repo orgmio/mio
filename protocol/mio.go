@@ -23,6 +23,7 @@ import (
 	"math/big"
 	"net"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -84,8 +85,7 @@ type TunnelClient struct {
 	quicDialing    bool
 	quicDialDone   chan struct{}
 	quicDialErr    error
-	quicWarming    bool
-	quicScheduled  bool
+	quicUpgrading  bool
 	h3Transport    *http3.Transport
 	tcpMuxMu       sync.Mutex
 	tcpMux         *yamux.Session
@@ -119,7 +119,7 @@ func (c *TunnelClient) DialContext(ctx context.Context, network, target string) 
 		}
 		return newFramedUDP(conn), nil
 	default:
-		return nil, fmt.Errorf("ixa does not support network %q", network)
+		return nil, fmt.Errorf("mio does not support network %q", network)
 	}
 }
 
@@ -176,7 +176,7 @@ func (c *TunnelClient) openTunnel(ctx context.Context, command byte, target stri
 	}
 	conn, err := c.openMuxStream(ctx, command, target)
 	if err == nil {
-		c.scheduleWarmup()
+		c.startQUICUpgrade()
 	}
 	return conn, err
 }
@@ -206,6 +206,7 @@ func (c *TunnelClient) openTCPTunnel(ctx context.Context, command byte, target s
 	}
 	tlsConn.HandshakeState.Hello.Random = append([]byte(nil), authRandom...)
 	applyBraveSigAlgs(tlsConn)
+	reorderBraveExtensions(tlsConn)
 	if err := tlsConn.BuildHandshakeState(); err != nil {
 		raw.Close()
 		return nil, fmt.Errorf("build Brave 1.93 ClientHello: %w", err)
@@ -270,6 +271,63 @@ func applyBraveSigAlgs(conn *tlsfork.UConn) {
 	conn.HandshakeState.Hello.SupportedSignatureAlgorithms = append([]tlsfork.SignatureScheme(nil), algorithms...)
 }
 
+// braveExtensionRank returns the position of a ClientHello extension in the
+// real Brave (Chromium 151) ClientHello captured in
+// caddy-real/way-brave-caddy-baidu.pcapng. utls's HelloChrome_Auto preset
+// shuffles Chrome extensions; Brave emits a fixed order, so we pin it down
+// for a byte-identical JA3 fingerprint.
+func braveExtensionRank(ext tlsfork.TLSExtension) int {
+	switch e := ext.(type) {
+	case *tlsfork.UtlsGREASEExtension:
+		if len(e.Body) == 0 {
+			return 0 // leading GREASE
+		}
+		return 17 // trailing GREASE with a single zero byte
+	case *tlsfork.KeyShareExtension:
+		return 1
+	case *tlsfork.SignatureAlgorithmsExtension:
+		return 2
+	case *tlsfork.ExtendedMasterSecretExtension:
+		return 3
+	case *tlsfork.SNIExtension:
+		return 4
+	case *tlsfork.StatusRequestExtension:
+		return 5
+	case *tlsfork.UtlsCompressCertExtension:
+		return 6
+	case *tlsfork.ALPNExtension:
+		return 7
+	case *tlsfork.ApplicationSettingsExtension, *tlsfork.ApplicationSettingsExtensionNew:
+		return 8
+	case *tlsfork.RenegotiationInfoExtension:
+		return 9
+	case *tlsfork.SupportedVersionsExtension:
+		return 10
+	case *tlsfork.GREASEEncryptedClientHelloExtension:
+		return 11
+	case *tlsfork.SessionTicketExtension:
+		return 12
+	case *tlsfork.SCTExtension:
+		return 13
+	case *tlsfork.SupportedCurvesExtension:
+		return 14
+	case *tlsfork.SupportedPointsExtension:
+		return 15
+	case *tlsfork.PSKKeyExchangeModesExtension:
+		return 16
+	default:
+		return 18
+	}
+}
+
+// reorderBraveExtensions arranges the built Chrome ClientHello extensions in
+// the fixed order emitted by the captured Brave build.
+func reorderBraveExtensions(conn *tlsfork.UConn) {
+	sort.SliceStable(conn.Extensions, func(i, j int) bool {
+		return braveExtensionRank(conn.Extensions[i]) < braveExtensionRank(conn.Extensions[j])
+	})
+}
+
 type TunnelServer struct {
 	config      TunnelServerConfig
 	key         []byte
@@ -307,7 +365,7 @@ func newServer(config TunnelServerConfig, loadCertificate func(coverTarget) (tls
 		tlsConfig: &tls.Config{
 			MinVersion:             tls.VersionTLS13,
 			Certificates:           []tls.Certificate{certificate},
-			NextProtos:             []string{"h2", "http/1.1"},
+			NextProtos:             []string{"http/1.1"},
 			SessionTicketsDisabled: true,
 		},
 		dialContext: dialer.DialContext,
@@ -416,7 +474,7 @@ func (s *TunnelServer) ListenAndServe(ctx context.Context) error {
 			defer s.track(raw, false)
 			defer raw.Close()
 			if err := s.serveRaw(ctx, raw); err != nil && ctx.Err() == nil {
-				log.Printf("ixa client %s: %v", raw.RemoteAddr(), err)
+				log.Printf("mio client %s: %v", raw.RemoteAddr(), err)
 			}
 		}()
 	}
@@ -490,7 +548,7 @@ func (s *TunnelServer) handle(ctx context.Context, client net.Conn) error {
 	if command == tunnelCommandUDP {
 		return exchangeUDP(client, upstream, target)
 	}
-	log.Printf("ixa CONNECT %s -> %s", client.RemoteAddr(), target)
+	log.Printf("mio CONNECT %s -> %s", client.RemoteAddr(), target)
 	if _, ok := client.(interface{ isQUICStream() }); !ok {
 		client = newVision(client)
 	}
@@ -614,13 +672,13 @@ func makeAuthRandom(key []byte, serverName string, now time.Time) ([]byte, error
 	if _, err := rand.Read(nonce); err != nil {
 		return nil, err
 	}
-	mask := hmacSum(key, []byte("ixa-client-random-mask"), nonce, []byte(serverName))
+	mask := hmacSum(key, []byte("mio-client-random-mask"), nonce, []byte(serverName))
 	timestamp := make([]byte, 8)
 	binary.BigEndian.PutUint64(timestamp, uint64(now.Unix()))
 	for i := range timestamp {
 		result[clientNonceSize+i] = timestamp[i] ^ mask[i]
 	}
-	tag := hmacSum(key, []byte("ixa-client-random-auth"), result[:16], []byte(serverName))
+	tag := hmacSum(key, []byte("mio-client-random-auth"), result[:16], []byte(serverName))
 	copy(result[16:], tag[:clientTagSize])
 	return result, nil
 }
@@ -629,11 +687,11 @@ func verifyAuthRandom(key []byte, serverName string, value []byte, now time.Time
 	if len(value) != clientRandomSize {
 		return false
 	}
-	expected := hmacSum(key, []byte("ixa-client-random-auth"), value[:16], []byte(serverName))
+	expected := hmacSum(key, []byte("mio-client-random-auth"), value[:16], []byte(serverName))
 	if !hmac.Equal(value[16:], expected[:clientTagSize]) {
 		return false
 	}
-	mask := hmacSum(key, []byte("ixa-client-random-mask"), value[:clientNonceSize], []byte(serverName))
+	mask := hmacSum(key, []byte("mio-client-random-mask"), value[:clientNonceSize], []byte(serverName))
 	timestampBytes := make([]byte, 8)
 	for i := range timestampBytes {
 		timestampBytes[i] = value[clientNonceSize+i] ^ mask[i]
@@ -644,11 +702,11 @@ func verifyAuthRandom(key []byte, serverName string, value []byte, now time.Time
 }
 
 func makeServerRandom(key []byte, serverName string, clientRandom []byte, now time.Time) ([]byte, error) {
-	return makeBoundRandom(key, "ixa-server-random", serverName, clientRandom, now)
+	return makeBoundRandom(key, "mio-server-random", serverName, clientRandom, now)
 }
 
 func verifyServerRandom(key []byte, serverName string, clientRandom, value []byte, now time.Time) bool {
-	return verifyBoundRandom(key, "ixa-server-random", serverName, clientRandom, value, now)
+	return verifyBoundRandom(key, "mio-server-random", serverName, clientRandom, value, now)
 }
 
 func makeBoundRandom(key []byte, label, serverName string, binding []byte, now time.Time) ([]byte, error) {

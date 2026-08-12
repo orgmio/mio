@@ -275,7 +275,7 @@ func TestTLSAuthenticatedTunnelAndRelay(t *testing.T) {
 		t.Fatalf("tunnel response = %d", response[0])
 	}
 	visionClient := newVision(client)
-	payload := []byte("ixa tunnel poc")
+	payload := []byte("mio tunnel poc")
 	if _, err := visionClient.Write(payload); err != nil {
 		t.Fatal(err)
 	}
@@ -340,7 +340,7 @@ func TestQUICAuthenticatedTunnelAndRelay(t *testing.T) {
 	transport := &quic.Transport{Conn: packetConn}
 	listener, err := transport.Listen(&tls.Config{
 		Certificates: []tls.Certificate{certificate},
-		NextProtos:   []string{ixaQUICALPN},
+		NextProtos:   []string{mioQUICALPN},
 	}, nil)
 	if err != nil {
 		t.Fatal(err)

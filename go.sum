@@ -6,8 +6,8 @@ github.com/hashicorp/yamux v0.1.2 h1:XtB8kyFOyHXYVFnwT5C3+Bdo8gArse7j2AQ0DA0Uey8
 github.com/hashicorp/yamux v0.1.2/go.mod h1:C+zze2n6e/7wshOZep2A70/aQU6QBRWJO/G6FT1wIns=
 github.com/klauspost/compress v1.19.2 h1:hMRETovs/pu/dVWN7zIT1PGG8t509MwT6bO7XSi26R8=
 github.com/klauspost/compress v1.19.2/go.mod h1:cwPg85FWrGar70rWktvGQj8/hthj3wpl0PGDogxkrSQ=
-github.com/orgmio/quic-mio v0.0.0-20260812081800-a23fd8f8cc52 h1:h6HDzMAaUo9DQJ49waQzoIH0iZNAUsCfzO98Z3bWyeo=
-github.com/orgmio/quic-mio v0.0.0-20260812081800-a23fd8f8cc52/go.mod h1:QlSMyS+2U4WjF0RwlIzoIsT3hu4aYb7KGRd9lzvtZHc=
+github.com/orgmio/quic-mio v0.0.0-20260812090234-d818debc6a70 h1:UbAEePac4t9Oza7PL6ytkM4r1zK8O3kZLZ832Y3i73k=
+github.com/orgmio/quic-mio v0.0.0-20260812090234-d818debc6a70/go.mod h1:QlSMyS+2U4WjF0RwlIzoIsT3hu4aYb7KGRd9lzvtZHc=
 github.com/orgmio/utls-mio v0.0.0-20260812073257-f76146880111 h1:h9N4X8kPuI4NAhzccK8gcUmEWh86Gw+vlx9UfHLFPaY=
 github.com/orgmio/utls-mio v0.0.0-20260812073257-f76146880111/go.mod h1:fh47zjyiCZTP70GpXMlFZV4d4W5c8VLW0OSJ7XVLbrY=
 github.com/pelletier/go-toml/v2 v2.4.3 h1:GTRvJQutkOSftxIFD5xw9aepkYNuPWmVJpffdDPYVpY=

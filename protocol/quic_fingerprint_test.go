@@ -16,14 +16,14 @@ func TestBraveQUICTransportParameters(t *testing.T) {
 	if got := binary.BigEndian.Uint32(params[0].Value[:4]); got != 1 {
 		t.Fatalf("chosen QUIC version = %#x, want v1", got)
 	}
-	grease := params[0].Value[4:8]
+	if got := binary.BigEndian.Uint32(params[0].Value[4:8]); got != 1 {
+		t.Fatalf("first available QUIC version = %#x, want v1", got)
+	}
+	grease := params[0].Value[8:12]
 	for _, b := range grease {
 		if b&0x0f != 0x0a {
 			t.Fatalf("invalid GREASE version %x", grease)
 		}
-	}
-	if got := binary.BigEndian.Uint32(params[0].Value[8:]); got != 1 {
-		t.Fatalf("supported QUIC version = %#x, want v1", got)
 	}
 	if params[1].ID != 0x3128 || string(params[1].Value) != "ORIG" {
 		t.Fatalf("invalid Google connection options parameter: %#v", params[1])

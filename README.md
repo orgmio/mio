@@ -1,18 +1,6 @@
-![](https://cdn.jsdelivr.net/gh/moaeiou/moaeiou@main/logo/mio.png)
-
 # MIO
 
 一个简易的跨平台、强伪装、高性能代理协议实现
-
-协议核心实现在 `protocol/mio.go`（包名 `mio`），可作为库直接引用：
-
-```go
-import mio "github.com/moaeiou/mio/protocol"
-
-tunnel, err := mio.NewTunnelClient(mio.PeerConfig{Server: "example.com", Port: 443, Key: "..."})
-```
-
-可执行文件入口在根目录的 `main.go`（`go build .` 产出 mio 二进制）。
 
 # 🚀 项目特点
 
@@ -87,9 +75,35 @@ systemctl restart mio
 
 请直接参阅该项目的example.toml文件 里面包含了该项目所有能支持的字段
 
-需要注意：
+## 🔩 开发
 
-### ⚠️ 安全性警告
+初始化环境（假设你用archlinux）
+
+```bash
+sudo pacman -Syyuu --needed git wget
+git clone https://github.com/orgmio/mio.git
+cd mio
+wget -O mio-test https://github.com/moaeiou/mio/releases/latest/download/mio-⚠️OS-⚠️archoptimize-⚠️LibC(Option)
+chmod +x ./mio-test
+cd caddy-real
+wget https://github.com/caddyserver/caddy/releases/download/v2.11.4/caddy_2.11.4_linux_amd64.tar.gz
+tar -xzvf caddy_2.11.4_linux_amd64.tar.gz
+rm ./caddy_2.11.4_linux_amd64.tar.gz ./LICENSE ./README.md
+chmod +x ./caddy
+cd ..
+```
+
+测试真brave访问真caddy（需要开好几个窗口）
+
+
+
+```bash
+sudo pacman -Syyuu --needed brave-bin
+# 启动caddy
+cd caddy-real
+```
+
+## ⚠️ 安全性警告
 
 为了配置的方便mio协议并不像reality那样需要一个PublicKey和一个ShortId
 
@@ -149,7 +163,7 @@ TCP回退已经加入有限的早期随机填充与边界扰动（Vision-lite）
 
 为了做到1:1指纹这是必不可少的
 
-brave-访问-caddy反代的百度:`https://r2.867678.xyz/pcap/way-brave-caddy.pcapng`
+brave访问caddy反代的百度:`https://r2.867678.xyz/pcap/way-brave-caddy-baidu.pcapng`
 
 mio:`https://r2.867678.xyz/pcap/way-mio.pcapng`
 
@@ -159,8 +173,8 @@ mio:`https://r2.867678.xyz/pcap/way-mio.pcapng`
 
 如果您希望二次开发，也可以指定一个更高版本
 
-另外 本项目还有使用quic-go和utls库（已迁移到github.com/orgmio/quic-mio与github.com/orgmio/utls-mio） 前者是MIT所以可以变成AGPL-v3
+另外 本项目还有使用quic-go和utls库（已迁移到github.com/orgmio/quic-mio与github.com/orgmio/utls-mio）
 
-后者需要附上一封版权声明 我们将他附到了LICENSE的下面
+前者是MIT所以可以变成AGPL-v3 后者需要附上一封版权声明 我们将他附到了LICENSE的下面
 
-如果您希望将其集成到诸如Sing-box、xray等内核中，可以修改为GPL-v3或其他
+如果您希望将其集成到诸如xray等代理工具中，可以修改为GPL-v3或其他

@@ -4,7 +4,7 @@ go 1.26.5
 
 require (
 	github.com/hashicorp/yamux v0.1.2
-	github.com/orgmio/quic-mio v0.0.0-20260812081800-a23fd8f8cc52
+	github.com/orgmio/quic-mio v0.0.0-20260812090234-d818debc6a70
 	github.com/orgmio/utls-mio v0.0.0-20260812073257-f76146880111
 	github.com/pelletier/go-toml/v2 v2.4.3
 	github.com/things-go/go-socks5 v0.1.1

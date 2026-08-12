@@ -25,10 +25,10 @@ import (
 )
 
 const (
-	ixaQUICALPN           = "h3"
+	mioQUICALPN           = "h3"
 	quicProbeTimeout      = 2 * time.Second
-	quicWarmupMin         = 250 * time.Millisecond
-	quicWarmupMax         = 550 * time.Millisecond
+	quicUpgradeMin        = 2 * time.Second
+	quicUpgradeMax        = 5 * time.Second
 	braveStreamWindow     = 6 * 1024 * 1024
 	braveConnectionWindow = 15 * 1024 * 1024
 )
@@ -45,50 +45,48 @@ func (c *TunnelClient) hasQUIC() bool {
 	return c.quicConn != nil && c.quicConn.Context().Err() == nil
 }
 
-func (c *TunnelClient) warmQUIC() {
+// startQUICUpgrade kicks off a background loop that repeatedly tries to
+// upgrade the tunnel from the initial TCP/HTTP/1.1 transport to HTTP/3 at
+// randomized intervals, until one attempt succeeds. New connections keep
+// using TCP until the upgrade completes.
+func (c *TunnelClient) startQUICUpgrade() {
 	c.quicMu.Lock()
-	if c.quicWarming || (c.quicConn != nil && c.quicConn.Context().Err() == nil) {
+	if c.quicUpgrading {
 		c.quicMu.Unlock()
 		return
 	}
-	c.quicWarming = true
+	c.quicUpgrading = true
 	c.quicMu.Unlock()
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), quicProbeTimeout)
-		defer cancel()
-		_, err := c.getQUIC(ctx)
-		c.quicMu.Lock()
-		c.quicWarming = false
-		c.quicMu.Unlock()
-		if err != nil {
-			log.Printf("QUIC warm-up failed; TCP remains active: %v", err)
-			return
-		}
-		log.Printf("QUIC warm-up complete; new proxy connections will use HTTP/3")
-	}()
+	go c.quicUpgradeLoop()
 }
 
-func (c *TunnelClient) scheduleWarmup() {
-	c.quicMu.Lock()
-	if c.quicScheduled || c.quicWarming || (c.quicConn != nil && c.quicConn.Context().Err() == nil) {
-		c.quicMu.Unlock()
-		return
-	}
-	c.quicScheduled = true
-	c.quicMu.Unlock()
-	delayMillis, err := randBetween(int(quicWarmupMin/time.Millisecond), int(quicWarmupMax/time.Millisecond))
-	if err != nil {
-		delayMillis = int(quicWarmupMin / time.Millisecond)
-	}
-	go func() {
-		timer := time.NewTimer(time.Duration(delayMillis) * time.Millisecond)
-		defer timer.Stop()
-		<-timer.C
+func (c *TunnelClient) quicUpgradeLoop() {
+	defer func() {
 		c.quicMu.Lock()
-		c.quicScheduled = false
+		c.quicUpgrading = false
 		c.quicMu.Unlock()
-		c.warmQUIC()
 	}()
+	for {
+		if c.hasQUIC() {
+			return
+		}
+		delayMillis, err := randBetween(int(quicUpgradeMin/time.Millisecond), int(quicUpgradeMax/time.Millisecond))
+		if err != nil {
+			delayMillis = int(quicUpgradeMin / time.Millisecond)
+		}
+		time.Sleep(time.Duration(delayMillis) * time.Millisecond)
+		if c.hasQUIC() {
+			return
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), quicProbeTimeout)
+		_, err = c.getQUIC(ctx)
+		cancel()
+		if err == nil {
+			log.Printf("QUIC upgrade complete; new proxy connections will use HTTP/3")
+			return
+		}
+		log.Printf("QUIC upgrade attempt failed; TCP remains active: %v", err)
+	}
 }
 
 type quicStreamConn struct {
@@ -169,7 +167,7 @@ func (c *TunnelClient) h3Client() *http3.Transport {
 	defer c.quicMu.Unlock()
 	if c.h3Transport == nil {
 		c.h3Transport = &http3.Transport{
-			TLSClientConfig: &tls.Config{ServerName: c.cover.host, NextProtos: []string{ixaQUICALPN}},
+			TLSClientConfig: &tls.Config{ServerName: c.cover.host, NextProtos: []string{mioQUICALPN}},
 			QUICConfig:      braveClientConfig(),
 			Dial: func(ctx context.Context, _ string, _ *tls.Config, _ *quic.Config) (*quic.Conn, error) {
 				return c.getQUIC(ctx)
@@ -279,7 +277,7 @@ func (c *TunnelClient) dialQUIC(ctx context.Context) (*quic.Conn, net.PacketConn
 			}
 			return certificate.VerifyHostname(c.cover.host)
 		},
-		NextProtos: []string{ixaQUICALPN},
+		NextProtos: []string{mioQUICALPN},
 	}, braveClientConfig())
 	if err != nil {
 		packetConn.Close()
@@ -310,7 +308,7 @@ func (s *TunnelServer) serveQUIC(ctx context.Context, packetConn *net.UDPConn) e
 	listener, err := transport.Listen(&tls.Config{
 		MinVersion:   tls.VersionTLS13,
 		Certificates: []tls.Certificate{certificate},
-		NextProtos:   []string{ixaQUICALPN},
+		NextProtos:   []string{mioQUICALPN},
 	}, &quic.Config{
 		HandshakeIdleTimeout:           tunnelDialTimeout,
 		MaxIdleTimeout:                 30 * time.Second,
@@ -375,9 +373,9 @@ func braveParams() []quic.TransportParameter {
 		random[i] = random[i]&0xf0 | 0x0a
 	}
 	versionInformation := make([]byte, 12)
-	binary.BigEndian.PutUint32(versionInformation[0:4], 1)
-	copy(versionInformation[4:8], random[:])
-	binary.BigEndian.PutUint32(versionInformation[8:12], 1)
+	binary.BigEndian.PutUint32(versionInformation[0:4], 1) // chosen QUIC version v1
+	binary.BigEndian.PutUint32(versionInformation[4:8], 1) // first available version v1
+	copy(versionInformation[8:12], random[:])              // GREASE available version
 	return []quic.TransportParameter{
 		{ID: 0x11, Value: versionInformation},
 		{ID: 0x3128, Value: []byte("ORIG")},
@@ -404,7 +402,7 @@ func (s *TunnelServer) handleHTTP3(w http.ResponseWriter, request *http.Request)
 	conn := &http3ServerConn{reader: io.MultiReader(bytes.NewReader(token), request.Body), writer: w, request: request}
 	defer request.Body.Close()
 	if err := s.handle(request.Context(), conn); err != nil && request.Context().Err() == nil {
-		log.Printf("ixa HTTP/3 CONNECT %s: %v", request.RemoteAddr, err)
+		log.Printf("mio HTTP/3 CONNECT %s: %v", request.RemoteAddr, err)
 	}
 }
 
