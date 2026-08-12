@@ -1,6 +1,18 @@
+![](https://cdn.jsdelivr.net/gh/moaeiou/moaeiou@main/logo/mio.png)
+
 # MIO
 
 一个简易的跨平台、强伪装、高性能代理协议实现
+
+协议核心实现在 `protocol/mio.go`（包名 `mio`），可作为库直接引用：
+
+```go
+import mio "github.com/moaeiou/mio/protocol"
+
+tunnel, err := mio.NewTunnelClient(mio.PeerConfig{Server: "example.com", Port: 443, Key: "..."})
+```
+
+可执行文件入口在根目录的 `main.go`（`go build .` 产出 mio 二进制）。
 
 # 🚀 项目特点
 
@@ -137,9 +149,7 @@ TCP回退已经加入有限的早期随机填充与边界扰动（Vision-lite）
 
 为了做到1:1指纹这是必不可少的
 
-brave-访问-caddy:`https://r2.867678.xyz/pcap/way-brave-caddy.pcapng`
-
-hysteria2:`https://r2.867678.xyz/pcap/way-hysteria2.pcapng`
+brave-访问-caddy反代的百度:`https://r2.867678.xyz/pcap/way-brave-caddy.pcapng`
 
 mio:`https://r2.867678.xyz/pcap/way-mio.pcapng`
 
@@ -149,7 +159,7 @@ mio:`https://r2.867678.xyz/pcap/way-mio.pcapng`
 
 如果您希望二次开发，也可以指定一个更高版本
 
-另外 本项目还有使用quic-go和utls库 前者是MIT所以可以变成AGPL-v3
+另外 本项目还有使用quic-go和utls库（已迁移到github.com/orgmio/quic-mio与github.com/orgmio/utls-mio） 前者是MIT所以可以变成AGPL-v3
 
 后者需要附上一封版权声明 我们将他附到了LICENSE的下面
 

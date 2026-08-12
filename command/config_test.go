@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/moaeiou/mio/protocal"
+	mio "github.com/moaeiou/mio/protocol"
 )
 
 func TestLoadConfigRejectsUnknownField(t *testing.T) {
@@ -27,9 +27,9 @@ func TestConfigMode(t *testing.T) {
 		want    string
 		wantErr bool
 	}{
-		{name: "client", config: Config{Peer: protocal.PeerConfig{Server: "127.0.0.1"}}, want: "client"},
-		{name: "server", config: Config{Server: protocal.TunnelServerConfig{Listen: "127.0.0.1"}}, want: "server"},
-		{name: "both", config: Config{Peer: protocal.PeerConfig{Server: "peer"}, Server: protocal.TunnelServerConfig{Listen: "server"}}, wantErr: true},
+		{name: "client", config: Config{Peer: mio.PeerConfig{Server: "127.0.0.1"}}, want: "client"},
+		{name: "server", config: Config{Server: mio.TunnelServerConfig{Listen: "127.0.0.1"}}, want: "server"},
+		{name: "both", config: Config{Peer: mio.PeerConfig{Server: "peer"}, Server: mio.TunnelServerConfig{Listen: "server"}}, wantErr: true},
 		{name: "neither", config: Config{}, wantErr: true},
 	}
 	for _, test := range tests {

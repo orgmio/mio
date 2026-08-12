@@ -8,7 +8,7 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/moaeiou/mio/protocal"
+	mio "github.com/moaeiou/mio/protocol"
 )
 
 func Run(args []string) error {
@@ -48,7 +48,7 @@ func Run(args []string) error {
 		if err := cfg.ValidateServer(); err != nil {
 			return fmt.Errorf("server config: %w", err)
 		}
-		server, err := protocal.NewTunnelServer(cfg.Server)
+		server, err := mio.NewTunnelServer(cfg.Server)
 		if err != nil {
 			return fmt.Errorf("create mio server: %w", err)
 		}
@@ -62,11 +62,11 @@ func Run(args []string) error {
 	if err := cfg.ValidateClient(); err != nil {
 		return fmt.Errorf("client config: %w", err)
 	}
-	tunnel, err := protocal.NewTunnelClient(cfg.Peer)
+	tunnel, err := mio.NewTunnelClient(cfg.Peer)
 	if err != nil {
 		return fmt.Errorf("create mio client: %w", err)
 	}
-	server := protocal.NewSOCKS5ServerWithTransport(cfg.SOCKS5, tunnel.DialContext)
+	server := mio.NewSOCKS5Server(cfg.SOCKS5, tunnel.DialContext)
 	log.Printf("SOCKS5 listening on %s; mio peer %s", cfg.SOCKS5.Address(), cfg.Peer.Address())
 	if err := server.ListenAndServe(ctx); err != nil {
 		return fmt.Errorf("serve SOCKS5: %w", err)

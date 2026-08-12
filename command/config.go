@@ -5,14 +5,14 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/moaeiou/mio/protocal"
+	mio "github.com/moaeiou/mio/protocol"
 	"github.com/pelletier/go-toml/v2"
 )
 
 type Config struct {
-	SOCKS5 protocal.SOCKS5Config       `toml:"socks5"`
-	Peer   protocal.PeerConfig         `toml:"peer"`
-	Server protocal.TunnelServerConfig `toml:"server"`
+	SOCKS5 mio.SOCKS5Config       `toml:"socks5"`
+	Peer   mio.PeerConfig         `toml:"peer"`
+	Server mio.TunnelServerConfig `toml:"server"`
 }
 
 func (c Config) Mode() (string, error) {
