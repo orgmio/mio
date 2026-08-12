@@ -6,10 +6,10 @@ github.com/hashicorp/yamux v0.1.2 h1:XtB8kyFOyHXYVFnwT5C3+Bdo8gArse7j2AQ0DA0Uey8
 github.com/hashicorp/yamux v0.1.2/go.mod h1:C+zze2n6e/7wshOZep2A70/aQU6QBRWJO/G6FT1wIns=
 github.com/klauspost/compress v1.19.2 h1:hMRETovs/pu/dVWN7zIT1PGG8t509MwT6bO7XSi26R8=
 github.com/klauspost/compress v1.19.2/go.mod h1:cwPg85FWrGar70rWktvGQj8/hthj3wpl0PGDogxkrSQ=
-github.com/orgmio/quic-mio v0.6.1 h1:L9q9ZfHHY5LbziZWNRQUapMjpv893UvYXPWQdwIwwpk=
-github.com/orgmio/quic-mio v0.6.1/go.mod h1:R/33AMabPqycM50BJR/1VCpU9SmemBGo0J99YLCkn7w=
-github.com/orgmio/utls-mio v1.8.2 h1:9qoSHAa8Bm1pVWiMostwy6oY0P/1eQpmHXzmCEA4LYM=
-github.com/orgmio/utls-mio v1.8.2/go.mod h1:fh47zjyiCZTP70GpXMlFZV4d4W5c8VLW0OSJ7XVLbrY=
+github.com/orgmio/quic-mio v0.0.0-20260812081800-a23fd8f8cc52 h1:h6HDzMAaUo9DQJ49waQzoIH0iZNAUsCfzO98Z3bWyeo=
+github.com/orgmio/quic-mio v0.0.0-20260812081800-a23fd8f8cc52/go.mod h1:QlSMyS+2U4WjF0RwlIzoIsT3hu4aYb7KGRd9lzvtZHc=
+github.com/orgmio/utls-mio v0.0.0-20260812073257-f76146880111 h1:h9N4X8kPuI4NAhzccK8gcUmEWh86Gw+vlx9UfHLFPaY=
+github.com/orgmio/utls-mio v0.0.0-20260812073257-f76146880111/go.mod h1:fh47zjyiCZTP70GpXMlFZV4d4W5c8VLW0OSJ7XVLbrY=
 github.com/pelletier/go-toml/v2 v2.4.3 h1:GTRvJQutkOSftxIFD5xw9aepkYNuPWmVJpffdDPYVpY=
 github.com/pelletier/go-toml/v2 v2.4.3/go.mod h1:2gIqNv+qfxSVS7cM2xJQKtLSTLUE9V8t9Stt+h56mCY=
 github.com/pmezard/go-difflib v1.0.0 h1:4DBwDE0NGyQoBHbLQYPwSUPoCMWR5BEzIk/f1lZbAQM=
