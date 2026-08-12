@@ -64,7 +64,6 @@ jobs:
             Fixes and improvements
             ## Fake object
             Brave 1.93.134 (official, Arch Linux x86_64) ; Chromium: 151.0.7922.108 ; Caddy 2.11.4
-            ❌现在并未真正实现上述斑斑的指纹对齐，编译出来只是为了查看差异，请不要使用该版本！
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
