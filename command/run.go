@@ -8,7 +8,7 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/moaeiou/ixa-go/protocal"
+	"github.com/moaeiou/mio/protocal"
 )
 
 func Run(args []string) error {
@@ -22,7 +22,7 @@ func Run(args []string) error {
 		explicitMode = args[0]
 		args = args[1:]
 	}
-	flags := flag.NewFlagSet("ixa-go", flag.ContinueOnError)
+	flags := flag.NewFlagSet("mio", flag.ContinueOnError)
 	configPath := "config.toml"
 	flags.StringVar(&configPath, "c", configPath, "path to the TOML configuration file")
 	if err := flags.Parse(args); err != nil {
@@ -50,11 +50,11 @@ func Run(args []string) error {
 		}
 		server, err := protocal.NewTunnelServer(cfg.Server)
 		if err != nil {
-			return fmt.Errorf("create ixa server: %w", err)
+			return fmt.Errorf("create mio server: %w", err)
 		}
-		log.Printf("ixa server listening on %s", cfg.Server.Address())
+		log.Printf("mio server listening on %s", cfg.Server.Address())
 		if err := server.ListenAndServe(ctx); err != nil {
-			return fmt.Errorf("serve ixa tunnel: %w", err)
+			return fmt.Errorf("serve mio tunnel: %w", err)
 		}
 		return nil
 	}
@@ -64,10 +64,10 @@ func Run(args []string) error {
 	}
 	tunnel, err := protocal.NewTunnelClient(cfg.Peer)
 	if err != nil {
-		return fmt.Errorf("create ixa client: %w", err)
+		return fmt.Errorf("create mio client: %w", err)
 	}
 	server := protocal.NewSOCKS5ServerWithTransport(cfg.SOCKS5, tunnel.DialContext)
-	log.Printf("SOCKS5 listening on %s; ixa peer %s", cfg.SOCKS5.Address(), cfg.Peer.Address())
+	log.Printf("SOCKS5 listening on %s; mio peer %s", cfg.SOCKS5.Address(), cfg.Peer.Address())
 	if err := server.ListenAndServe(ctx); err != nil {
 		return fmt.Errorf("serve SOCKS5: %w", err)
 	}

@@ -9,7 +9,7 @@ import (
 const Version = "0.2.0"
 
 func PrintVersion() {
-	fmt.Printf("ixa-go V%s\n\n", Version)
+	fmt.Printf("mio V%s\n\n", Version)
 	info, _ := debug.ReadBuildInfo()
 	settings := make(map[string]string)
 	for _, s := range info.Settings {

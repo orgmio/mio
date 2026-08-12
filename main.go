@@ -4,7 +4,7 @@ import (
 	"log"
 	"os"
 
-	"github.com/moaeiou/ixa-go/command"
+	"github.com/moaeiou/mio/command"
 )
 
 func main() {

@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/moaeiou/ixa-go/protocal"
+	"github.com/moaeiou/mio/protocal"
 )
 
 func TestLoadConfigRejectsUnknownField(t *testing.T) {

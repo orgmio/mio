@@ -1,4 +1,4 @@
-# ixa-go
+# MIO
 
 一个简易的跨平台、强伪装、高性能代理协议实现
 
@@ -6,67 +6,70 @@
 
 - 抗审查
 - 速度快
-- 跨平台通用
+- 多平台通用
 - 部署简单
 
 ## 📚 项目文档
 
 ## ⚙️ 如何使用
+
 安装
+
 ```bash
 cd /usr/bin
-wget -O ixa-go https://github.com/moaeiou/ixa-go/releases/latest/download/ixa-go-⚠️OS-⚠️archoptimize-⚠️LibC
-chmod +x ./ixa-go
+wget -O mio https://github.com/moaeiou/mio/releases/latest/download/mio-⚠️OS-⚠️archoptimize-⚠️LibC(option)
+chmod +x ./mio
 cd /etc/
-mkdir /etc/ixa
-touch /etc/ixa/config.toml
-chmod 755 /etc/ixa/*
+mkdir -p /etc/mio
+touch /etc/mio/config.toml
+chmod 755 /etc/mio/*
 ```
 
 启动服务端：
 
 ```bash
-./ixa-go -c example-server.toml
+./mio -c example-server.toml
 ```
 
 启动客户端：
 
 ```bash
-./ixa-go -c example-client.toml
+./mio -c example-client.toml
 ```
 
 如果配置文件叫做`config.toml`那么可以直接执行二进制文件
 
 作为systemd服务
+
 ```bash
-cat <<'EOF'> /usr/lib/systemd/system/ixa-go.service
+cat <<'EOF'> /usr/lib/systemd/system/mio.service
 [Unit]
-Description=ixa-go service
-Documentation=https://867678.xyz/project/ixa-go
+Description=mio service
+Documentation=https://867678.xyz/projects/mio
 After=network.target nss-lookup.target network-online.target
 [Service]
 Type=simple
-WorkingDirectory=/etc/ixa
-ExecStart=/usr/bin/ixa-go server -c /etc/ixa/config.toml
+WorkingDirectory=/etc/mio
+ExecStart=/usr/bin/mio server -c /etc/mio/config.toml
 Restart=on-failure
 [Install]
 WantedBy=multi-user.target
 EOF
 systemctl daemon-reload
-systemctl start ixa-go
-systemctl status ixa-go # 显示running即为成功
-systemctl enable ixa-go # 可选 开机自启动
+systemctl start mio
+systemctl status mio # 显示running即为成功
+systemctl enable mio # 可选 开机自启动
 ```
 
 更新
+
 ```bash
 cd /usr/bin
-rm ./ixa-go
-wget -O ixa-go https://github.com/moaeiou/ixa-go/releases/latest/download/ixa-go-⚠️OS-⚠️archoptimize-⚠️LibC
-chmod +x ./ixa-go
+rm ./mio
+wget -O mio https://github.com/moaeiou/mio/releases/latest/download/mio-⚠️OS-⚠️archoptimize-⚠️LibC(Option)
+chmod +x ./mio
+systemctl restart mio
 ```
-
-需要手动重启一次服务
 
 ## 📄 配置文件
 
@@ -76,7 +79,7 @@ chmod +x ./ixa-go
 
 ### ⚠️ 安全性警告
 
-为了配置的方便ixa协议并不像reality那样需要一个PublicKey和一个ShortId
+为了配置的方便mio协议并不像reality那样需要一个PublicKey和一个ShortId
 
 所以key字段必须是用密码学工具生成的无关联字符
 
@@ -107,14 +110,10 @@ openssl rand -hex 32
 
 只要在公网传输的数据包与wireshark抓到的真实行为无异此项目就算成功
 
-- **way-ixa.pcapng**:我前前后后用他访问了些正常的网站用于测试伪装程度
+- **way-mio.pcapng**:我前前后后用他访问了些正常的网站用于测试伪装程度
 - **way-brave-caddy-baidu.pcapng**:brave访问一个反代了百度的caddy的行为 配置文件在Caddyfile
 
 需注意local.867678.xyz没有真正的权威指向 这是我用来测试的
-
-```ini
-local.867678.xyz 127.0.0.1
-```
 
 ### 🔍 详细行为
 
@@ -132,7 +131,17 @@ QUIC不可用时继续使用TCP/TLS。
 
 TCP回退已经加入有限的早期随机填充与边界扰动（Vision-lite），之后自动切回无填充的数据流。
 
-尚未实现Caddy本地回落、Brave指纹模拟和TLS record layer安全退出，不应用于生产环境。（我觉得他实现了这是GPT写的）
+### 🤝 参考指纹和握手动作
+
+这是真实抓包真正的客户端访问真正的服务端的抓包文件
+
+为了做到1:1指纹这是必不可少的
+
+brave-访问-caddy:`https://r2.867678.xyz/pcap/way-brave-caddy.pcapng`
+
+hysteria2:`https://r2.867678.xyz/pcap/way-hysteria2.pcapng`
+
+mio:`https://r2.867678.xyz/pcap/way-mio.pcapng`
 
 # ⚖️ 条款与授权
 

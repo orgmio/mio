@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/moaeiou/ixa-go/protocal"
+	"github.com/moaeiou/mio/protocal"
 	"github.com/pelletier/go-toml/v2"
 )
 

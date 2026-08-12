@@ -52,17 +52,17 @@ jobs:
         shell: bash
         run: |
           mv go.mod.backup go.mod
-          ${{ matrix.tag }} go build -o ./ixa-go-${{ matrix.dickname }} .
+          ${{ matrix.tag }} go build -o ./mio-${{ matrix.dickname }} .
 
       - name: Release
         uses: softprops/action-gh-release@master
         with:
           tag_name: V${{ steps.get_version.outputs.version }}
-          files: ixa-go-${{ matrix.dickname }}
+          files: mio-${{ matrix.dickname }}
           body: |
             # 📝 Release Note
             Fixes and improvements
             ## Fake object
-            Brave 1.93.129 (official, Arch Linux x86_64) ; Chromium: 151.0.7922.71 ; Caddy 2.11.4
+            Brave 1.93.134 (official, Arch Linux x86_64) ; Chromium: 151.0.7922.108 ; Caddy 2.11.4
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
