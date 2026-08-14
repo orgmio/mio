@@ -323,6 +323,41 @@ func TestVisionConnPreservesBytesAcrossRawSwitch(t *testing.T) {
 	}
 }
 
+func TestVisionConnLargeWrite(t *testing.T) {
+	left, right := net.Pipe()
+	client := newVision(left)
+	server := newVision(right)
+	defer client.Close()
+	defer server.Close()
+	payload := make([]byte, visionMaxChunk+123)
+	if _, err := rand.Read(payload); err != nil {
+		t.Fatal(err)
+	}
+	type writeResult struct {
+		n   int
+		err error
+	}
+	done := make(chan writeResult, 1)
+	go func() {
+		n, err := client.Write(payload)
+		done <- writeResult{n: n, err: err}
+	}()
+	got := make([]byte, len(payload))
+	if _, err := io.ReadFull(server, got); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, payload) {
+		t.Fatal("vision framing changed payload")
+	}
+	result := <-done
+	if result.err != nil {
+		t.Fatal(result.err)
+	}
+	if result.n != len(payload) {
+		t.Fatalf("Write() = %d, want %d", result.n, len(payload))
+	}
+}
+
 func TestQUICAuthenticatedTunnelAndRelay(t *testing.T) {
 	const keyHex = "93cb499ed398baa3f36f76c20483989ec911f8fe5ccd43a3c5f58952ade56435"
 	key, err := decodeKey(keyHex)

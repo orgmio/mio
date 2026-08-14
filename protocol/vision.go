@@ -37,37 +37,43 @@ func (c *visionConn) Write(p []byte) (int, error) {
 	if len(p) == 0 {
 		return 0, nil
 	}
-	if c.writeRaw {
-		return c.Conn.Write(p)
-	}
-	if c.written >= visionBudget {
-		packet := append([]byte{visionRawFrame, 0, 0, 0, 0}, p...)
-		if err := writeAll(c.Conn, packet); err != nil {
-			return 0, err
+	written := 0
+	for len(p) > 0 {
+		if c.writeRaw {
+			n, err := c.Conn.Write(p)
+			return written + n, err
 		}
-		c.writeRaw = true
-		return len(p), nil
-	}
-	chunkSize := min(len(p), visionMaxChunk)
-	paddingSize, err := randBetween(0, visionMaxPadding)
-	if err != nil {
-		return 0, err
-	}
-	frame := make([]byte, 5+chunkSize+paddingSize)
-	frame[0] = visionDataFrame
-	binary.BigEndian.PutUint16(frame[1:3], uint16(chunkSize))
-	binary.BigEndian.PutUint16(frame[3:5], uint16(paddingSize))
-	copy(frame[5:], p[:chunkSize])
-	if paddingSize > 0 {
-		if _, err := rand.Read(frame[5+chunkSize:]); err != nil {
-			return 0, err
+		if c.written >= visionBudget {
+			packet := append([]byte{visionRawFrame, 0, 0, 0, 0}, p...)
+			if err := writeAll(c.Conn, packet); err != nil {
+				return written, err
+			}
+			c.writeRaw = true
+			return written + len(p), nil
 		}
+		chunkSize := min(len(p), visionMaxChunk)
+		paddingSize, err := randBetween(0, visionMaxPadding)
+		if err != nil {
+			return written, err
+		}
+		frame := make([]byte, 5+chunkSize+paddingSize)
+		frame[0] = visionDataFrame
+		binary.BigEndian.PutUint16(frame[1:3], uint16(chunkSize))
+		binary.BigEndian.PutUint16(frame[3:5], uint16(paddingSize))
+		copy(frame[5:], p[:chunkSize])
+		if paddingSize > 0 {
+			if _, err := rand.Read(frame[5+chunkSize:]); err != nil {
+				return written, err
+			}
+		}
+		if err := writeAll(c.Conn, frame); err != nil {
+			return written, err
+		}
+		c.written += chunkSize
+		written += chunkSize
+		p = p[chunkSize:]
 	}
-	if err := writeAll(c.Conn, frame); err != nil {
-		return 0, err
-	}
-	c.written += chunkSize
-	return chunkSize, nil
+	return written, nil
 }
 
 func (c *visionConn) Read(p []byte) (int, error) {
