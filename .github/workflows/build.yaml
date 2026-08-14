@@ -73,6 +73,5 @@ jobs:
         uses: moaeiou/moaeiou/actions/rsync@main
         with:
           local: ./mio-${{ matrix.dickname }}
-          remote: /var/www/html/mio/
+          remote: /var/www/html/orgmio/mio/
           key: ${{ secrets.CC_LA_KEY }}
-          extra: --delete
