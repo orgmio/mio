@@ -172,11 +172,7 @@ openssl rand -hex 32
 
 ### 🔍 详细行为
 
-目前已实现ClientHello.Random与ServerHello.Random双向隐藏HMAC认证，以及认证失败时回落到sni对应的真实站点。
-
 服务端会在同一个端口监听TCP和UDP：TCP认证失败时原样转发到sni，UDP流量则按客户端会话原样转发到sni以兼容QUIC/HTTP3探测。
-
-SOCKS5目前支持TCP CONNECT和UDP ASSOCIATE。
 
 客户端先建立TCP/TLS连接并在后台预热QUIC；预热完成后复用QUIC连接，每个TCP代理连接使用独立双向stream，UDP数据报也通过QUIC stream传输。
 
@@ -184,7 +180,7 @@ QUIC不可用时继续使用TCP/TLS。
 
 服务端启动时会验证并缓存sni站点的真实证书链，客户端通过反向HMAC验证服务端。
 
-TCP回退已经加入有限的早期随机填充与边界扰动（Vision-lite），之后自动切回无填充的数据流。
+TCP回退已经加入有限的早期随机填充与边界扰动（XTLS-vision-like），之后自动切回无填充的数据流。
 
 ### 🤝 参考指纹和握手动作
 
@@ -202,7 +198,7 @@ mio:`https://r2.867678.xyz/pcap/way-mio.pcapng`
 
 如果您希望二次开发，也可以指定一个更高版本
 
-另外 本项目还有使用quic-go和utls库（已迁移到github.com/orgmio/quic-mio与github.com/orgmio/utls-mio）
+另外 本项目还有魔改quic-go和utls库（已迁移到github.com/orgmio/quic-mio与github.com/orgmio/utls-mio）
 
 前者是MIT所以可以变成AGPL-v3 后者需要附上一封版权声明 我们将他附到了LICENSE的下面
 
