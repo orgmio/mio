@@ -27,6 +27,8 @@ import (
 const (
 	mioQUICALPN           = "h3"
 	quicProbeTimeout      = 2 * time.Second
+	quicFirstHoldMin      = 2 * time.Second
+	quicFirstHoldMax      = 6 * time.Second
 	quicUpgradeMin        = 2 * time.Second
 	quicUpgradeMax        = 5 * time.Second
 	braveStreamWindow     = 6 * 1024 * 1024
@@ -82,10 +84,8 @@ func (c *TunnelClient) warmH2() {
 	_ = tlsConn.Close()
 }
 
-// startQUICUpgrade kicks off a background loop that repeatedly tries to
-// upgrade the tunnel from the initial TCP/HTTP/1.1 transport to HTTP/3 at
-// randomized intervals, until one attempt succeeds. The first probe runs
-// immediately so new connections can use QUIC instead of staying on TCP.
+// startQUICUpgrade kicks off a background loop that waits like a browser
+// seeing Alt-Svc, then probes HTTP/3 until one attempt succeeds.
 func (c *TunnelClient) startQUICUpgrade() {
 	c.quicMu.Lock()
 	if c.quicUpgrading {
@@ -108,13 +108,15 @@ func (c *TunnelClient) quicUpgradeLoop() {
 		if c.hasQUIC() {
 			return
 		}
-		delayMillis, err := randBetween(int(quicUpgradeMin/time.Millisecond), int(quicUpgradeMax/time.Millisecond))
+		low, high := int(quicUpgradeMin/time.Millisecond), int(quicUpgradeMax/time.Millisecond)
+		if first {
+			low, high = int(quicFirstHoldMin/time.Millisecond), int(quicFirstHoldMax/time.Millisecond)
+		}
+		delayMillis, err := randBetween(low, high)
 		if err != nil {
-			delayMillis = int(quicUpgradeMin / time.Millisecond)
+			delayMillis = low
 		}
-		if !first {
-			time.Sleep(time.Duration(delayMillis) * time.Millisecond)
-		}
+		time.Sleep(time.Duration(delayMillis) * time.Millisecond)
 		first = false
 		if c.hasQUIC() {
 			return
