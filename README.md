@@ -17,7 +17,7 @@
 
 ```bash
 cd /usr/bin
-wget -O mio https://github.com/moaeiou/mio/releases/latest/download/mio-⚠️OS-⚠️archoptimize-⚠️LibC(option)
+wget -O mio https://github.com/orgmio/mio/releases/latest/download/mio-⚠️OS-⚠️archoptimize-⚠️LibC(option)
 chmod +x ./mio
 cd /etc/
 mkdir -p /etc/mio
@@ -66,7 +66,7 @@ systemctl enable mio # 可选 开机自启动
 ```bash
 cd /usr/bin
 rm ./mio
-wget -O mio https://github.com/moaeiou/mio/releases/latest/download/mio-⚠️OS-⚠️archoptimize-⚠️LibC(Option)
+wget -O mio https://github.com/orgmio/mio/releases/latest/download/mio-⚠️OS-⚠️archoptimize-⚠️LibC(Option)
 chmod +x ./mio
 systemctl restart mio
 ```
@@ -79,8 +79,6 @@ systemctl restart mio
 sudo pacman -Syyuu --needed git wget
 git clone https://github.com/orgmio/mio.git
 cd mio
-wget -O mio-test https://github.com/moaeiou/mio/releases/latest/download/mio-⚠️OS-⚠️archoptimize-⚠️LibC(Option)
-chmod +x ./mio-test
 cd caddy-real
 wget https://github.com/caddyserver/caddy/releases/download/v2.11.4/caddy_2.11.4_linux_amd64.tar.gz
 tar -xzvf caddy_2.11.4_linux_amd64.tar.gz
@@ -125,7 +123,7 @@ go run .
 
 ```bash
 touch config.toml
-wget -O mio https://github.com/moaeiou/mio/releases/latest/download/mio-⚠️OS-⚠️archoptimize-⚠️LibC(Option)
+wget -O mio https://github.com/orgmio/mio/releases/latest/download/mio-⚠️OS-⚠️archoptimize-⚠️LibC(Option)
 chmod +x ./mio
 ./mio
 ```
@@ -169,18 +167,6 @@ openssl rand -hex 32
 - **way-brave-caddy-baidu.pcapng**:brave访问一个反代了百度的caddy的行为 配置文件在Caddyfile
 
 需注意local.867678.xyz没有真正的权威指向 这是我用来测试的
-
-### 🔍 详细行为
-
-服务端会在同一个端口监听TCP和UDP：TCP认证失败时原样转发到sni，UDP流量则按客户端会话原样转发到sni以兼容QUIC/HTTP3探测。
-
-客户端先建立TCP/TLS连接并在后台预热QUIC；预热完成后复用QUIC连接，每个TCP代理连接使用独立双向stream，UDP数据报也通过QUIC stream传输。
-
-QUIC不可用时继续使用TCP/TLS。
-
-服务端启动时会验证并缓存sni站点的真实证书链，客户端通过反向HMAC验证服务端。
-
-TCP回退已经加入有限的早期随机填充与边界扰动（XTLS-vision-like），之后自动切回无填充的数据流。
 
 ### 🤝 参考指纹和握手动作
 

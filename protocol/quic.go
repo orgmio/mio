@@ -52,9 +52,33 @@ func (c *TunnelClient) hasQUIC() bool {
 	return c.quicConn != nil && c.quicConn.Context().Err() == nil
 }
 
+// StartCover pre-warms HTTP/2 and starts probing HTTP/3 so the first
+// SOCKS request does not pay a full TLS handshake.
+func (c *TunnelClient) StartCover() {
+	c.startQUICUpgrade()
+	go c.warmH2()
+}
+
 // StartQUICUpgrade begins probing for HTTP/3 immediately so later proxy
 // connections do not get stuck on the TCP fallback.
 func (c *TunnelClient) StartQUICUpgrade() { c.startQUICUpgrade() }
+
+func (c *TunnelClient) warmH2() {
+	if c.hasH2() {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), tunnelDialTimeout)
+	defer cancel()
+	tlsConn, err := c.dialCoverTLS(ctx)
+	if err != nil {
+		return
+	}
+	if tlsConn.ConnectionState().NegotiatedProtocol == coverHTTP2ALPN {
+		c.installH2(tlsConn)
+		return
+	}
+	_ = tlsConn.Close()
+}
 
 // startQUICUpgrade kicks off a background loop that repeatedly tries to
 // upgrade the tunnel from the initial TCP/HTTP/1.1 transport to HTTP/3 at
@@ -156,7 +180,9 @@ func (c *TunnelClient) openQUIC(ctx context.Context, command byte, target string
 	if err != nil {
 		cancel()
 		_ = requestWriter.CloseWithError(err)
-		c.dropQUIC(connection)
+		if connection.Context().Err() != nil {
+			c.dropQUIC(connection)
+		}
 		return nil, err
 	}
 	if response.StatusCode != http.StatusOK {
@@ -475,7 +501,12 @@ func (c *http3ServerConn) Write(p []byte) (int, error) {
 	}
 	return n, err
 }
-func (*http3ServerConn) Close() error                     { return nil }
+func (c *http3ServerConn) Close() error {
+	if c.request != nil && c.request.Body != nil {
+		return c.request.Body.Close()
+	}
+	return nil
+}
 func (c *http3ServerConn) LocalAddr() net.Addr            { return http3Addr(c.request.Host) }
 func (c *http3ServerConn) RemoteAddr() net.Addr           { return http3Addr(c.request.RemoteAddr) }
 func (*http3ServerConn) SetDeadline(time.Time) error      { return nil }

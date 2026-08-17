@@ -42,6 +42,11 @@ const (
 	maxTargetSize     = 1024
 	maxClockSkew      = 30 * time.Second
 	tunnelDialTimeout = 10 * time.Second
+	// How long the SOCKS client will wait to get a tunnel stream.
+	// Origin dial happens after the stream is already open.
+	clientDialTimeout = 5 * time.Second
+	// How long the server waits for the destination website.
+	originDialTimeout = 4 * time.Second
 	clientRandomSize  = 32
 	clientNonceSize   = 8
 	clientTagSize     = 16
@@ -109,6 +114,11 @@ func NewTunnelClient(config PeerConfig) (*TunnelClient, error) {
 }
 
 func (c *TunnelClient) DialContext(ctx context.Context, network, target string) (net.Conn, error) {
+	if _, ok := ctx.Deadline(); !ok {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, clientDialTimeout)
+		defer cancel()
+	}
 	switch network {
 	case "tcp":
 		return c.openTunnel(ctx, tunnelCommandTCP, target)
@@ -363,6 +373,11 @@ func newServer(config TunnelServerConfig, loadCertificate func(coverTarget) (tls
 			SessionTicketsDisabled: true,
 		},
 		dialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
+			if _, ok := ctx.Deadline(); !ok {
+				var cancel context.CancelFunc
+				ctx, cancel = context.WithTimeout(ctx, originDialTimeout)
+				defer cancel()
+			}
 			conn, err := dialer.DialContext(ctx, network, address)
 			if err != nil {
 				return nil, err
@@ -515,7 +530,7 @@ func (s *TunnelServer) fallback(ctx context.Context, client net.Conn, preface []
 		}
 	}
 	log.Printf("TCP fallback %s -> %s", client.RemoteAddr(), target)
-	relay(client, upstream)
+	relay(ctx, client, upstream)
 	return nil
 }
 
@@ -532,16 +547,21 @@ func (s *TunnelServer) handle(ctx context.Context, client net.Conn) error {
 		_, _ = client.Write([]byte{2})
 		return fmt.Errorf("unsupported tunnel command %d", command)
 	}
-	upstream, err := s.dialContext(ctx, network, target)
-	if err != nil {
-		_, _ = client.Write([]byte{1})
-		return fmt.Errorf("connect to %s: %w", target, err)
-	}
-	defer upstream.Close()
+	// Tell the client the stream is open before dialing the website so
+	// SOCKS can return success and the browser can move on. A failed
+	// origin dial just closes the stream.
 	if _, err := client.Write([]byte{0}); err != nil {
 		return err
 	}
 	_ = client.SetDeadline(time.Time{})
+	dialCtx, cancel := context.WithTimeout(ctx, originDialTimeout)
+	upstream, err := s.dialContext(dialCtx, network, target)
+	cancel()
+	if err != nil {
+		_ = client.Close()
+		return fmt.Errorf("connect to %s: %w", target, err)
+	}
+	defer upstream.Close()
 	if command == tunnelCommandUDP {
 		return exchangeUDP(client, upstream, target)
 	}
@@ -551,7 +571,7 @@ func (s *TunnelServer) handle(ctx context.Context, client net.Conn) error {
 			client = newVision(client)
 		}
 	}
-	relay(client, upstream)
+	relay(ctx, client, upstream)
 	return nil
 }
 

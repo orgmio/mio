@@ -3,10 +3,12 @@ package mio
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"net"
 	"strconv"
+	"strings"
 	"sync"
 
 	socks5 "github.com/things-go/go-socks5"
@@ -29,7 +31,7 @@ type SOCKS5Server struct {
 
 func NewSOCKS5Server(config SOCKS5Config, dialContext func(context.Context, string, string) (net.Conn, error)) *SOCKS5Server {
 	server := socks5.NewServer(
-		socks5.WithLogger(socks5.NewLogger(log.Default())),
+		socks5.WithLogger(quietSOCKSLogger{}),
 		socks5.WithResolver(remoteResolver{}),
 		socks5.WithDial(dialContext),
 		socks5.WithBufferPool(bufferpool.NewPool(relayBufferSize)),
@@ -53,6 +55,29 @@ func (s *SOCKS5Server) ListenAndServe(ctx context.Context) error {
 	return err
 }
 
+type quietSOCKSLogger struct{}
+
+func (quietSOCKSLogger) Errorf(format string, args ...interface{}) {
+	msg := fmt.Sprintf(format, args...)
+	if isBenignProxyError(msg) {
+		return
+	}
+	log.Print(msg)
+}
+
+func isBenignProxyError(msg string) bool {
+	switch {
+	case strings.Contains(msg, "broken pipe"),
+		strings.Contains(msg, "connection reset"),
+		strings.Contains(msg, "use of closed network connection"),
+		strings.Contains(msg, io.EOF.Error()),
+		strings.Contains(msg, io.ErrClosedPipe.Error()):
+		return true
+	default:
+		return false
+	}
+}
+
 type remoteResolver struct{}
 
 func (remoteResolver) Resolve(ctx context.Context, _ string) (context.Context, net.IP, error) {
@@ -63,7 +88,7 @@ const relayBufferSize = 256 * 1024
 
 var relayBuffers = sync.Pool{New: func() any { return make([]byte, relayBufferSize) }}
 
-func relay(a, b net.Conn) {
+func relay(ctx context.Context, a, b net.Conn) {
 	var wait sync.WaitGroup
 	wait.Add(2)
 	copyOneWay := func(destination, source net.Conn) {
@@ -79,5 +104,16 @@ func relay(a, b net.Conn) {
 	}
 	go copyOneWay(a, b)
 	go copyOneWay(b, a)
-	wait.Wait()
+	done := make(chan struct{})
+	go func() {
+		wait.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-ctx.Done():
+		_ = a.Close()
+		_ = b.Close()
+		<-done
+	}
 }

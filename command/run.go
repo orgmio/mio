@@ -66,7 +66,7 @@ func Run(args []string) error {
 	if err != nil {
 		return fmt.Errorf("create mio client: %w", err)
 	}
-	tunnel.StartQUICUpgrade()
+	tunnel.StartCover()
 	server := mio.NewSOCKS5Server(cfg.SOCKS5, tunnel.DialContext)
 	log.Printf("SOCKS5 listening on %s", cfg.SOCKS5.Address())
 	log.Printf("mio peer %s", cfg.Peer.Address())

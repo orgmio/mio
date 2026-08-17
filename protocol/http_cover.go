@@ -214,7 +214,12 @@ func (c *httpCoverConn) Write(p []byte) (int, error) {
 	}
 	return n, err
 }
-func (*httpCoverConn) Close() error                     { return nil }
+func (c *httpCoverConn) Close() error {
+	if c.request != nil && c.request.Body != nil {
+		return c.request.Body.Close()
+	}
+	return nil
+}
 func (c *httpCoverConn) LocalAddr() net.Addr            { return http3Addr(c.request.Host) }
 func (c *httpCoverConn) RemoteAddr() net.Addr           { return http3Addr(c.request.RemoteAddr) }
 func (*httpCoverConn) SetDeadline(time.Time) error      { return nil }
@@ -266,7 +271,7 @@ func (c *TunnelClient) installH2(tlsConn net.Conn) {
 		MaxHeaderListSize:          262144,
 		MaxDecoderHeaderTableSize:  65536,
 		MaxEncoderHeaderTableSize:  65536,
-		StrictMaxConcurrentStreams: true,
+		StrictMaxConcurrentStreams: false,
 		IdleConnTimeout:            30 * time.Second,
 		ReadIdleTimeout:            25 * time.Second,
 		PingTimeout:                15 * time.Second,
