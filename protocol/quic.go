@@ -52,11 +52,13 @@ func (c *TunnelClient) hasQUIC() bool {
 	return c.quicConn != nil && c.quicConn.Context().Err() == nil
 }
 
-// StartCover pre-warms HTTP/2 and starts probing HTTP/3 so the first
-// SOCKS request does not pay a full TLS handshake.
+// StartCover establishes TCP/HTTP/2 first (Brave does this), then probes
+// HTTP/3 on the same peer address. QUIC must not race TCP on cold start.
 func (c *TunnelClient) StartCover() {
-	c.startQUICUpgrade()
-	go c.warmH2()
+	go func() {
+		c.warmH2()
+		c.startQUICUpgrade()
+	}()
 }
 
 // StartQUICUpgrade begins probing for HTTP/3 immediately so later proxy
@@ -298,7 +300,7 @@ func (c *TunnelClient) getQUIC(ctx context.Context) (*quic.Conn, error) {
 // dialQUIC performs network and TLS work without holding quicMu. This keeps
 // concurrent SOCKS requests free to take the TCP fallback while QUIC warms up.
 func (c *TunnelClient) dialQUIC(ctx context.Context) (*quic.Conn, net.PacketConn, error) {
-	udpAddress, err := net.ResolveUDPAddr("udp", c.config.Address())
+	udpAddress, err := c.quicRemoteAddr()
 	if err != nil {
 		return nil, nil, err
 	}

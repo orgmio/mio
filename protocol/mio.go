@@ -94,6 +94,8 @@ type TunnelClient struct {
 	h2Mu           sync.Mutex
 	h2Transport    *http2.Transport
 	h2Conn         net.Conn
+	peerMu         sync.Mutex
+	peerUDP        *net.UDPAddr
 }
 
 func NewTunnelClient(config PeerConfig) (*TunnelClient, error) {
@@ -173,7 +175,6 @@ func (c *framedUDPConn) Read(buffer []byte) (int, error) {
 }
 
 func (c *TunnelClient) openTunnel(ctx context.Context, command byte, target string) (net.Conn, error) {
-	c.startQUICUpgrade()
 	if c.hasQUIC() {
 		conn, err := c.openQUIC(ctx, command, target)
 		if err == nil {
@@ -185,15 +186,88 @@ func (c *TunnelClient) openTunnel(ctx context.Context, command byte, target stri
 		}
 		log.Printf("HTTP/3 unavailable for %s, downgrading to TCP: %v", target, err)
 	}
-	return c.openTCPCover(ctx, command, target)
+	conn, err := c.openTCPCover(ctx, command, target)
+	if err == nil {
+		c.startQUICUpgrade()
+	}
+	return conn, err
+}
+
+func (c *TunnelClient) rememberPeer(addr net.Addr) {
+	if addr == nil {
+		return
+	}
+	host, port, err := net.SplitHostPort(addr.String())
+	if err != nil {
+		return
+	}
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return
+	}
+	n, err := strconv.Atoi(port)
+	if err != nil || n <= 0 {
+		return
+	}
+	c.peerMu.Lock()
+	c.peerUDP = &net.UDPAddr{IP: ip, Port: n}
+	c.peerMu.Unlock()
+}
+
+func (c *TunnelClient) quicRemoteAddr() (*net.UDPAddr, error) {
+	c.peerMu.Lock()
+	if c.peerUDP != nil {
+		addr := *c.peerUDP
+		c.peerMu.Unlock()
+		return &addr, nil
+	}
+	c.peerMu.Unlock()
+	return net.ResolveUDPAddr("udp", c.config.Address())
+}
+
+func (c *TunnelClient) peerTCPAddress() (string, error) {
+	c.peerMu.Lock()
+	if c.peerUDP != nil {
+		addr := c.peerUDP.String()
+		c.peerMu.Unlock()
+		return addr, nil
+	}
+	c.peerMu.Unlock()
+	host := c.config.Server
+	if ip := net.ParseIP(host); ip != nil {
+		return net.JoinHostPort(host, strconv.Itoa(c.config.Port)), nil
+	}
+	ips, err := net.DefaultResolver.LookupIPAddr(context.Background(), host)
+	if err != nil {
+		return "", err
+	}
+	var chosen net.IP
+	for _, ip := range ips {
+		if ip.IP.To4() != nil {
+			chosen = ip.IP
+			break
+		}
+	}
+	if chosen == nil && len(ips) > 0 {
+		chosen = ips[0].IP
+	}
+	if chosen == nil {
+		return "", fmt.Errorf("no address for %s", host)
+	}
+	return net.JoinHostPort(chosen.String(), strconv.Itoa(c.config.Port)), nil
 }
 
 func (c *TunnelClient) dialCoverTLS(ctx context.Context) (*tlsfork.UConn, error) {
-	raw, err := c.dialer.DialContext(ctx, "tcp", c.config.Address())
+	address, err := c.peerTCPAddress()
+	if err != nil {
+		return nil, err
+	}
+	raw, err := c.dialer.DialContext(ctx, "tcp", address)
 	if err != nil {
 		return nil, err
 	}
 	preferTCPBBR(raw)
+	c.rememberPeer(raw.RemoteAddr())
 	authRandom, err := makeAuthRandom(c.key, c.cover.host, time.Now())
 	if err != nil {
 		raw.Close()
@@ -214,6 +288,7 @@ func (c *TunnelClient) dialCoverTLS(ctx context.Context) (*tlsfork.UConn, error)
 	}
 	tlsConn.HandshakeState.Hello.Random = append([]byte(nil), authRandom...)
 	applyBraveSigAlgs(tlsConn)
+	pinBraveECH(tlsConn)
 	reorderBraveExtensions(tlsConn)
 	if err := tlsConn.BuildHandshakeState(); err != nil {
 		raw.Close()
@@ -267,9 +342,13 @@ func applyBraveSigAlgs(conn *tlsfork.UConn) {
 // bytes, matching way-brave-caddy-baidu.pcapng (HelloChrome_Auto defaults
 // to 186). Must run before the first BuildHandshakeState.
 func pinBraveECH(conn *tlsfork.UConn) {
-	for _, extension := range conn.Extensions {
-		if ech, ok := extension.(*tlsfork.GREASEEncryptedClientHelloExtension); ok {
-			ech.CandidatePayloadLens = []uint16{192}
+	for i, extension := range conn.Extensions {
+		if _, ok := extension.(*tlsfork.GREASEEncryptedClientHelloExtension); ok {
+			// Replace the object so utls re-inits payload length. Mutating
+			// CandidatePayloadLens after the first BuildHandshakeState is a no-op.
+			conn.Extensions[i] = &tlsfork.GREASEEncryptedClientHelloExtension{
+				CandidatePayloadLens: []uint16{192},
+			}
 			return
 		}
 	}
