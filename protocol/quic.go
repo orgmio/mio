@@ -31,6 +31,13 @@ const (
 	quicUpgradeMax        = 5 * time.Second
 	braveStreamWindow     = 6 * 1024 * 1024
 	braveConnectionWindow = 15 * 1024 * 1024
+	// Flow-control ceilings after the Brave-sized initial transport
+	// parameters. These are advertised later via MAX_DATA / MAX_STREAM_DATA
+	// and do not change the handshake fingerprint.
+	fastStreamWindow     = 64 * 1024 * 1024
+	fastConnectionWindow = 96 * 1024 * 1024
+	h3PipeBuffer         = 1 << 20
+	udpSocketBuffer      = 8 << 20
 )
 
 type tunnelRejectedError struct{ code byte }
@@ -45,10 +52,14 @@ func (c *TunnelClient) hasQUIC() bool {
 	return c.quicConn != nil && c.quicConn.Context().Err() == nil
 }
 
+// StartQUICUpgrade begins probing for HTTP/3 immediately so later proxy
+// connections do not get stuck on the TCP fallback.
+func (c *TunnelClient) StartQUICUpgrade() { c.startQUICUpgrade() }
+
 // startQUICUpgrade kicks off a background loop that repeatedly tries to
 // upgrade the tunnel from the initial TCP/HTTP/1.1 transport to HTTP/3 at
-// randomized intervals, until one attempt succeeds. New connections keep
-// using TCP until the upgrade completes.
+// randomized intervals, until one attempt succeeds. The first probe runs
+// immediately so new connections can use QUIC instead of staying on TCP.
 func (c *TunnelClient) startQUICUpgrade() {
 	c.quicMu.Lock()
 	if c.quicUpgrading {
@@ -66,6 +77,7 @@ func (c *TunnelClient) quicUpgradeLoop() {
 		c.quicUpgrading = false
 		c.quicMu.Unlock()
 	}()
+	first := true
 	for {
 		if c.hasQUIC() {
 			return
@@ -74,7 +86,10 @@ func (c *TunnelClient) quicUpgradeLoop() {
 		if err != nil {
 			delayMillis = int(quicUpgradeMin / time.Millisecond)
 		}
-		time.Sleep(time.Duration(delayMillis) * time.Millisecond)
+		if !first {
+			time.Sleep(time.Duration(delayMillis) * time.Millisecond)
+		}
+		first = false
 		if c.hasQUIC() {
 			return
 		}
@@ -94,7 +109,8 @@ type quicStreamConn struct {
 	connection *quic.Conn
 }
 
-func (*quicStreamConn) isQUICStream() {}
+func (*quicStreamConn) isQUICStream()  {}
+func (*quicStreamConn) isCoverStream() {}
 
 func (c *quicStreamConn) LocalAddr() net.Addr  { return c.connection.LocalAddr() }
 func (c *quicStreamConn) RemoteAddr() net.Addr { return c.connection.RemoteAddr() }
@@ -108,7 +124,7 @@ func (c *TunnelClient) openQUIC(ctx context.Context, command byte, target string
 	if err := writeRequest(&token, c.key, command, target, time.Now()); err != nil {
 		return nil, err
 	}
-	requestReader, requestWriter := io.Pipe()
+	requestReader, requestWriter := newBufferedPipe(h3PipeBuffer)
 	streamCtx, cancel := context.WithCancel(context.Background())
 	request, err := http.NewRequestWithContext(streamCtx, http.MethodConnect, "https://"+c.cover.host+"/", requestReader)
 	if err != nil {
@@ -179,13 +195,14 @@ func (c *TunnelClient) h3Client() *http3.Transport {
 
 type http3StreamConn struct {
 	reader     io.ReadCloser
-	writer     *io.PipeWriter
+	writer     *bufferedPipeWriter
 	connection *quic.Conn
 	cancel     context.CancelFunc
 	closeOnce  sync.Once
 }
 
 func (*http3StreamConn) isQUICStream()                 {}
+func (*http3StreamConn) isCoverStream()                {}
 func (c *http3StreamConn) Read(p []byte) (int, error)  { return c.reader.Read(p) }
 func (c *http3StreamConn) Write(p []byte) (int, error) { return c.writer.Write(p) }
 func (c *http3StreamConn) Close() error {
@@ -263,6 +280,7 @@ func (c *TunnelClient) dialQUIC(ctx context.Context) (*quic.Conn, net.PacketConn
 	if err != nil {
 		return nil, nil, err
 	}
+	raiseUDPBuffers(packetConn)
 	connection, err := quic.Dial(ctx, packetConn, udpAddress, &tls.Config{
 		MinVersion:         tls.VersionTLS13,
 		ServerName:         c.cover.host,
@@ -313,13 +331,14 @@ func (s *TunnelServer) serveQUIC(ctx context.Context, packetConn *net.UDPConn) e
 		HandshakeIdleTimeout:           tunnelDialTimeout,
 		MaxIdleTimeout:                 30 * time.Second,
 		InitialStreamReceiveWindow:     braveStreamWindow,
-		MaxStreamReceiveWindow:         braveStreamWindow,
+		MaxStreamReceiveWindow:         fastStreamWindow,
 		InitialConnectionReceiveWindow: braveConnectionWindow,
-		MaxConnectionReceiveWindow:     braveConnectionWindow,
+		MaxConnectionReceiveWindow:     fastConnectionWindow,
 		MaxIncomingStreams:             100,
 		MaxIncomingUniStreams:          103,
 		KeepAlivePeriod:                20 * time.Second,
 		EnableDatagrams:                true,
+		UseBBR:                         true,
 	})
 	if err != nil {
 		return err
@@ -349,15 +368,16 @@ func braveClientConfig() *quic.Config {
 		HandshakeIdleTimeout:                tunnelDialTimeout,
 		MaxIdleTimeout:                      30 * time.Second,
 		InitialStreamReceiveWindow:          braveStreamWindow,
-		MaxStreamReceiveWindow:              braveStreamWindow,
+		MaxStreamReceiveWindow:              fastStreamWindow,
 		InitialConnectionReceiveWindow:      braveConnectionWindow,
-		MaxConnectionReceiveWindow:          braveConnectionWindow,
+		MaxConnectionReceiveWindow:          fastConnectionWindow,
 		MaxIncomingStreams:                  100,
 		MaxIncomingUniStreams:               103,
 		KeepAlivePeriod:                     20 * time.Second,
 		InitialPacketSize:                   1250,
 		EnableDatagrams:                     true,
 		UseChromeClientHello:                true,
+		UseBBR:                              true,
 		AdditionalClientTransportParameters: braveParams(),
 	}
 }
@@ -428,6 +448,10 @@ func (s *TunnelServer) h3Proxy() http.Handler {
 		request.Host = s.cover.host
 		request.Header.Del("Proxy-Authorization")
 	}
+	proxy.ModifyResponse = func(response *http.Response) error {
+		s.advertiseH3(response.Header)
+		return nil
+	}
 	proxy.Transport = &http.Transport{
 		DialContext:     s.dialContext,
 		TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12, ServerName: s.cover.host},
@@ -436,23 +460,19 @@ func (s *TunnelServer) h3Proxy() http.Handler {
 }
 
 type http3ServerConn struct {
-	reader    io.Reader
-	writer    io.Writer
-	request   *http.Request
-	flushOnce sync.Once
+	reader  io.Reader
+	writer  io.Writer
+	request *http.Request
 }
 
 func (*http3ServerConn) isQUICStream()                {}
+func (*http3ServerConn) isCoverStream()               {}
 func (c *http3ServerConn) Read(p []byte) (int, error) { return c.reader.Read(p) }
 func (c *http3ServerConn) Write(p []byte) (int, error) {
 	n, err := c.writer.Write(p)
-	// The first write is the one-byte tunnel status and must reach the client
-	// before it starts relaying. Bulk payload writes should remain batchable.
-	c.flushOnce.Do(func() {
-		if flusher, ok := c.writer.(http.Flusher); ok {
-			flusher.Flush()
-		}
-	})
+	if flusher, ok := c.writer.(http.Flusher); ok {
+		flusher.Flush()
+	}
 	return n, err
 }
 func (*http3ServerConn) Close() error                     { return nil }

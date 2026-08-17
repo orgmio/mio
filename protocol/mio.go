@@ -29,10 +29,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/hashicorp/yamux"
 	quic "github.com/orgmio/quic-mio"
 	"github.com/orgmio/quic-mio/http3"
 	tlsfork "github.com/orgmio/utls-mio"
+	"golang.org/x/net/http2"
 )
 
 const (
@@ -48,7 +48,6 @@ const (
 	maxClientHello    = 64 * 1024
 	tunnelCommandTCP  = 1
 	tunnelCommandUDP  = 3
-	tunnelCommandMux  = 4
 	maxUDPPayload     = 65507
 )
 
@@ -87,8 +86,9 @@ type TunnelClient struct {
 	quicDialErr    error
 	quicUpgrading  bool
 	h3Transport    *http3.Transport
-	tcpMuxMu       sync.Mutex
-	tcpMux         *yamux.Session
+	h2Mu           sync.Mutex
+	h2Transport    *http2.Transport
+	h2Conn         net.Conn
 }
 
 func NewTunnelClient(config PeerConfig) (*TunnelClient, error) {
@@ -163,25 +163,22 @@ func (c *framedUDPConn) Read(buffer []byte) (int, error) {
 }
 
 func (c *TunnelClient) openTunnel(ctx context.Context, command byte, target string) (net.Conn, error) {
+	c.startQUICUpgrade()
 	if c.hasQUIC() {
-		if conn, err := c.openQUIC(ctx, command, target); err == nil {
+		conn, err := c.openQUIC(ctx, command, target)
+		if err == nil {
 			return conn, nil
-		} else {
-			var rejected *tunnelRejectedError
-			if errors.As(err, &rejected) {
-				return nil, err
-			}
-			log.Printf("QUIC stream unavailable for %s, falling back to TCP: %v", target, err)
 		}
+		var rejected *tunnelRejectedError
+		if errors.As(err, &rejected) {
+			return nil, err
+		}
+		log.Printf("HTTP/3 unavailable for %s, downgrading to TCP: %v", target, err)
 	}
-	conn, err := c.openMuxStream(ctx, command, target)
-	if err == nil {
-		c.startQUICUpgrade()
-	}
-	return conn, err
+	return c.openTCPCover(ctx, command, target)
 }
 
-func (c *TunnelClient) openTCPTunnel(ctx context.Context, command byte, target string) (net.Conn, error) {
+func (c *TunnelClient) dialCoverTLS(ctx context.Context) (*tlsfork.UConn, error) {
 	raw, err := c.dialer.DialContext(ctx, "tcp", c.config.Address())
 	if err != nil {
 		return nil, err
@@ -198,8 +195,9 @@ func (c *TunnelClient) openTCPTunnel(ctx context.Context, command byte, target s
 		ServerName:                    c.cover.host,
 		InsecureSkipVerify:            true,
 		InsecureSkipCertificateVerify: true,
-		NextProtos:                    []string{"h2", "http/1.1"},
+		NextProtos:                    []string{coverHTTP2ALPN, coverHTTP1ALPN},
 	}, tlsfork.HelloChrome_Auto)
+	pinBraveECH(tlsConn)
 	if err := tlsConn.BuildHandshakeState(); err != nil {
 		raw.Close()
 		return nil, fmt.Errorf("build Chrome ClientHello: %w", err)
@@ -228,23 +226,7 @@ func (c *TunnelClient) openTCPTunnel(ctx context.Context, command byte, target s
 		}
 		return nil, errors.New("ServerHello HMAC authentication failed")
 	}
-	if err := writeRequest(tlsConn, c.key, command, target, time.Now()); err != nil {
-		tlsConn.Close()
-		return nil, err
-	}
-	response := []byte{0}
-	if _, err := io.ReadFull(tlsConn, response); err != nil {
-		tlsConn.Close()
-		return nil, fmt.Errorf("read tunnel response: %w", err)
-	}
-	if response[0] != 0 {
-		tlsConn.Close()
-		return nil, fmt.Errorf("tunnel server rejected target (code %d)", response[0])
-	}
 	_ = tlsConn.SetDeadline(time.Time{})
-	if command == tunnelCommandTCP {
-		return newVision(tlsConn), nil
-	}
 	return tlsConn, nil
 }
 
@@ -269,6 +251,18 @@ func applyBraveSigAlgs(conn *tlsfork.UConn) {
 		}
 	}
 	conn.HandshakeState.Hello.SupportedSignatureAlgorithms = append([]tlsfork.SignatureScheme(nil), algorithms...)
+}
+
+// pinBraveECH forces the GREASE ECH payload so the extension length is 250
+// bytes, matching way-brave-caddy-baidu.pcapng (HelloChrome_Auto defaults
+// to 186). Must run before the first BuildHandshakeState.
+func pinBraveECH(conn *tlsfork.UConn) {
+	for _, extension := range conn.Extensions {
+		if ech, ok := extension.(*tlsfork.GREASEEncryptedClientHelloExtension); ok {
+			ech.CandidatePayloadLens = []uint16{192}
+			return
+		}
+	}
 }
 
 // braveExtensionRank returns the position of a ClientHello extension in the
@@ -365,10 +359,19 @@ func newServer(config TunnelServerConfig, loadCertificate func(coverTarget) (tls
 		tlsConfig: &tls.Config{
 			MinVersion:             tls.VersionTLS13,
 			Certificates:           []tls.Certificate{certificate},
-			NextProtos:             []string{"http/1.1"},
+			NextProtos:             []string{coverHTTP2ALPN, coverHTTP1ALPN},
 			SessionTicketsDisabled: true,
 		},
-		dialContext: dialer.DialContext,
+		dialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
+			conn, err := dialer.DialContext(ctx, network, address)
+			if err != nil {
+				return nil, err
+			}
+			if network == "tcp" {
+				preferTCPBBR(conn)
+			}
+			return conn, nil
+		},
 		clients:     make(map[net.Conn]struct{}),
 		udpSessions: make(map[string]*udpForwardSession),
 	}, nil
@@ -437,6 +440,7 @@ func (s *TunnelServer) ListenAndServe(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("listen UDP: %w", err)
 	}
+	raiseUDPBuffers(udpListener)
 	defer udpListener.Close()
 	udpErrors := make(chan error, 1)
 	go func() {
@@ -495,7 +499,7 @@ func (s *TunnelServer) serveRaw(ctx context.Context, raw net.Conn) error {
 	}
 	tlsConfig := s.tlsConfig.Clone()
 	tlsConfig.Rand = io.MultiReader(bytes.NewReader(serverRandom), rand.Reader)
-	return s.handle(ctx, tls.Server(replayed, tlsConfig))
+	return s.serveAuthedTLS(ctx, tls.Server(replayed, tlsConfig))
 }
 
 func (s *TunnelServer) fallback(ctx context.Context, client net.Conn, preface []byte) error {
@@ -521,13 +525,6 @@ func (s *TunnelServer) handle(ctx context.Context, client net.Conn) error {
 	if err != nil {
 		return err
 	}
-	if command == tunnelCommandMux {
-		if _, err := client.Write([]byte{0}); err != nil {
-			return err
-		}
-		_ = client.SetDeadline(time.Time{})
-		return s.serveTCPMux(ctx, client)
-	}
 	network := "tcp"
 	if command == tunnelCommandUDP {
 		network = "udp"
@@ -549,8 +546,10 @@ func (s *TunnelServer) handle(ctx context.Context, client net.Conn) error {
 		return exchangeUDP(client, upstream, target)
 	}
 	log.Printf("mio CONNECT %s -> %s", client.RemoteAddr(), target)
-	if _, ok := client.(interface{ isQUICStream() }); !ok {
-		client = newVision(client)
+	if _, framed := client.(interface{ isCoverStream() }); !framed {
+		if _, quic := client.(interface{ isQUICStream() }); !quic {
+			client = newVision(client)
+		}
 	}
 	relay(client, upstream)
 	return nil

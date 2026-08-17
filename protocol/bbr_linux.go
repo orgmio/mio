@@ -20,6 +20,7 @@ func enableTCPBBR(raw syscall.RawConn) error {
 }
 
 func preferTCPBBR(conn net.Conn) {
+	raiseTCPBuffers(conn)
 	syscallConn, ok := conn.(syscall.Conn)
 	if !ok {
 		return

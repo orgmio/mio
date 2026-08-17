@@ -10,6 +10,7 @@ import (
 	"sync"
 
 	socks5 "github.com/things-go/go-socks5"
+	"github.com/things-go/go-socks5/bufferpool"
 )
 
 type SOCKS5Config struct {
@@ -31,6 +32,7 @@ func NewSOCKS5Server(config SOCKS5Config, dialContext func(context.Context, stri
 		socks5.WithLogger(socks5.NewLogger(log.Default())),
 		socks5.WithResolver(remoteResolver{}),
 		socks5.WithDial(dialContext),
+		socks5.WithBufferPool(bufferpool.NewPool(relayBufferSize)),
 	)
 	return &SOCKS5Server{config: config, server: server}
 }
@@ -57,12 +59,18 @@ func (remoteResolver) Resolve(ctx context.Context, _ string) (context.Context, n
 	return ctx, nil, nil
 }
 
+const relayBufferSize = 256 * 1024
+
+var relayBuffers = sync.Pool{New: func() any { return make([]byte, relayBufferSize) }}
+
 func relay(a, b net.Conn) {
 	var wait sync.WaitGroup
 	wait.Add(2)
 	copyOneWay := func(destination, source net.Conn) {
 		defer wait.Done()
-		_, _ = io.Copy(destination, source)
+		buf := relayBuffers.Get().([]byte)
+		defer relayBuffers.Put(buf)
+		_, _ = io.CopyBuffer(destination, source, buf)
 		if halfCloser, ok := destination.(interface{ CloseWrite() error }); ok {
 			_ = halfCloser.CloseWrite()
 		} else {
