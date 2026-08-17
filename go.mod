@@ -2,11 +2,9 @@ module github.com/orgmio/mio
 
 go 1.26.6
 
-replace github.com/orgmio/quic-mio => ../quic-mio
-
 require (
-	github.com/orgmio/quic-mio v0.0.0-20260814132503-dada959933f4
-	github.com/orgmio/utls-mio v0.0.0-20260814132053-323c12a86305
+	github.com/orgmio/quic-mio v0.0.0-20260817085318-3f87cb222234
+	github.com/orgmio/utls-mio v0.0.0-20260817085211-240b6369a8a5
 	github.com/pelletier/go-toml/v2 v2.4.3
 	github.com/things-go/go-socks5 v0.1.1
 	golang.org/x/net v0.58.0
