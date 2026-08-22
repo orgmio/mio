@@ -6,8 +6,12 @@ github.com/klauspost/compress v1.19.2 h1:hMRETovs/pu/dVWN7zIT1PGG8t509MwT6bO7XSi
 github.com/klauspost/compress v1.19.2/go.mod h1:cwPg85FWrGar70rWktvGQj8/hthj3wpl0PGDogxkrSQ=
 github.com/orgmio/quic-mio v0.0.0-20260817085318-3f87cb222234 h1:+peCr5WImzsxW2gtkRb6EkMPvSJAvZgl2VGWLMyLv5Y=
 github.com/orgmio/quic-mio v0.0.0-20260817085318-3f87cb222234/go.mod h1:KmX2XJlcRqwJrMbOxeuTgT5A0owy5Nof/ivkUpyLXBY=
+github.com/orgmio/quic-mio v0.0.0-20260822114118-36455243bb29 h1:wf//0OKb+PZ9qpbxKWvyRwVeeYIClBIbcff+nbJKlQc=
+github.com/orgmio/quic-mio v0.0.0-20260822114118-36455243bb29/go.mod h1:OfpjcioyqvhSx6Z1ccQ0rMRsK5kVNXkH8PVn4VKXjcQ=
 github.com/orgmio/utls-mio v0.0.0-20260817085211-240b6369a8a5 h1:9XwZOC/0LrSApdXjIFiuxE487LYTiOJI2VD45LkFZg8=
 github.com/orgmio/utls-mio v0.0.0-20260817085211-240b6369a8a5/go.mod h1:BIuPf1txLC+xh/uSZ6x5GXe7jEHFnCi2nhNWYSqdPC8=
+github.com/orgmio/utls-mio v0.0.0-20260822113955-5666f909d410 h1:eMUw/BQgarEHRoqsuaoj3oZsszT03ZkdBmCVgzl4mpQ=
+github.com/orgmio/utls-mio v0.0.0-20260822113955-5666f909d410/go.mod h1:1G//Jd2sk5l53UxEj185Wp8A6pRpl2GqYL4gz9SES9A=
 github.com/pelletier/go-toml/v2 v2.4.3 h1:GTRvJQutkOSftxIFD5xw9aepkYNuPWmVJpffdDPYVpY=
 github.com/pelletier/go-toml/v2 v2.4.3/go.mod h1:2gIqNv+qfxSVS7cM2xJQKtLSTLUE9V8t9Stt+h56mCY=
 github.com/pmezard/go-difflib v1.0.0 h1:4DBwDE0NGyQoBHbLQYPwSUPoCMWR5BEzIk/f1lZbAQM=

@@ -21,7 +21,7 @@ jobs:
             dickname: "linux-amd64v2-glibc"
           - tag: "GOAMD64=v1"
             dickname: "linux-amd64v1-glibc"
-          - tag: ""
+          - tag: "CGO_ENABLED=1"
             dickname: "linux-amd64-glibc"
           - tag: "CGO_ENABLED=0"
             dickname: "linux-amd64-musl"

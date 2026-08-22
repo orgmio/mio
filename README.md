@@ -13,7 +13,7 @@
 
 ### ⚙️ 如何使用
 
-安装（mio是通用的，也就是说他又可以是客户端又可以是服务端，具体请查看示例配置文件）
+安装（mio是通用的，具体请查看示例配置文件）
 
 ```bash
 cd /usr/bin
@@ -71,7 +71,57 @@ chmod +x ./mio
 systemctl restart mio
 ```
 
-### 🔩 开发
+## ⚠️ 安全性警告
+
+为了配置的方便mio协议并不像reality那样需要一个PublicKey和一个ShortId
+
+mio使用一个名为HMAC的TLSClientHello字段进行握手验证
+
+这个字段一般是随机的所以很好藏密钥，不过需要稍微长一点才有安全性
+
+下列是一个推荐的示例用openssl生成符合要求的密码
+
+```bash
+openssl rand -hex 32
+```
+
+这里以HMAC`（RFC2104）`的规范为例
+| 长度 单位：字节 | 安全性 |
+| ---- | ---- |
+| 16 | 刚达到不那么容易破解的临界点 |
+| 32 | 现代暴力破解工具一般没辙 |
+| 64 | 刚好卡在HMAC的临界点 超过就会被SHA256压缩成32字节 没意义 |
+
+`sni`字段必须是一个支持TLS1.3的HTTPS URL，因为需要偷他的证书(没错这是类Reality)，端口可以任意。
+
+## 🏃 协议行为
+
+协议行为旨在模拟`caddy-real/`下存在的wireshark抓包文件
+
+这个文件夹下是由wireshark抓包的真实brave访问真实caddy的行为
+
+客户端行为旨在模拟ArchLinux源`extra`中带的`Brave`浏览器的无痕模式
+
+只要在公网传输的数据包与wireshark抓到的真实行为无异此项目就算成功
+
+- **way-mio.pcapng**:我前前后后用他访问了些正常的网站用于测试伪装程度
+- **way-brave-caddy-baidu.pcapng**:brave访问一个反代了百度的caddy的行为 配置文件在Caddyfile
+
+需注意local.867678.xyz没有真正的权威指向 这是我用来测试的
+
+### 🤝 参考指纹和握手动作
+
+这是真实抓包真正的客户端访问真正的服务端的抓包文件
+
+为了做到1:1指纹这是必不可少的
+
+brave访问caddy反代的百度:`https://r2.867678.xyz/pcap/way-brave-caddy-baidu.pcapng`
+
+mio:`https://r2.867678.xyz/pcap/way-mio.pcapng`
+
+## 🔩 开发
+
+开发使用的配置文件可以在项目根目录新建一个叫做`config.toml`的配置文件，caddy可以直接放在`caddy-real/`目录 Git已忽略他们
 
 初始化环境（假设你用archlinux）
 
@@ -79,6 +129,7 @@ systemctl restart mio
 sudo pacman -Syyuu --needed git wget
 git clone https://github.com/orgmio/mio.git
 cd mio
+wget -O config.toml https://raw.githubusercontent.com/orgmio/mio/refs/heads/main/example-client.toml
 cd caddy-real
 wget https://github.com/caddyserver/caddy/releases/download/v2.11.4/caddy_2.11.4_linux_amd64.tar.gz
 tar -xzvf caddy_2.11.4_linux_amd64.tar.gz
@@ -114,8 +165,6 @@ tls.handshake.extensions_server_name == "local.867678.xyz"
 在客户端 mio项目根目录上：
 
 ```bash
-touch config.toml
-# 在config.toml中写入你的客户端配置文件
 go run .
 ```
 
@@ -130,62 +179,12 @@ chmod +x ./mio
 
 抓包和过滤目标的方法与brave中的示例相同
 
-## ⚠️ 安全性警告
-
-为了配置的方便mio协议并不像reality那样需要一个PublicKey和一个ShortId
-
-所以key字段必须是用密码学工具生成的无关联字符
-
-下列是一个推荐的示例用openssl生成符合要求的密码
-
-```bash
-openssl rand -hex 32
-```
-
-这里以HMAC`（RFC2104）`的规范为例
-| 长度 单位：字节 | 安全性 |
-| ---- | ---- |
-| 16 | 刚达到不那么容易破解的临界点 |
-| 32 | 现代暴力破解工具一般没辙 |
-| 64 | 刚好卡在HMAC的临界点 超过就会被SHA256压缩成32字节 没意义 |
-
-`sni`字段必须是一个支持TLS1.3的HTTPS URL，因为需要偷他的证书(没错这是类Reality);端口可以任意。
-
-开发使用的配置文件可以在项目根目录新建一个叫做`config.toml`的配置文件，caddy可以直接放在`caddy-real/`目录 Git已忽略他们
-
-## 🏃 协议行为
-
-协议行为旨在模拟`caddy-real/`下存在的wireshark抓包文件
-
-这个文件夹下是由wireshark抓包的真实brave访问真实caddy的行为
-
-客户端行为旨在模拟ArchLinux源`extra`中带的`Brave`浏览器的无痕模式
-
-只要在公网传输的数据包与wireshark抓到的真实行为无异此项目就算成功
-
-- **way-mio.pcapng**:我前前后后用他访问了些正常的网站用于测试伪装程度
-- **way-brave-caddy-baidu.pcapng**:brave访问一个反代了百度的caddy的行为 配置文件在Caddyfile
-
-需注意local.867678.xyz没有真正的权威指向 这是我用来测试的
-
-### 🤝 参考指纹和握手动作
-
-这是真实抓包真正的客户端访问真正的服务端的抓包文件
-
-为了做到1:1指纹这是必不可少的
-
-brave访问caddy反代的百度:`https://r2.867678.xyz/pcap/way-brave-caddy-baidu.pcapng`
-
-mio:`https://r2.867678.xyz/pcap/way-mio.pcapng`
-
 # ⚖️ 条款与授权
 
 该项目以GNU AFFERO GENERAL PUBLIC LICENSE v3授权 详细参见LICENSE
 
-如果您希望二次开发，也可以指定一个更高版本
+如果您希望二次开发或集成到其他代理工具如xray中，也可以指定一个AGPL或GPL v3.0或更高版本
 
-另外 本项目还有魔改quic-go和utls库（已迁移到github.com/orgmio/quic-mio与github.com/orgmio/utls-mio）
+另外 本项目魔改了quic-go和utls库（github.com/orgmio/quic-mio与github.com/orgmio/utls-mio）
 
-前者是MIT所以可以变成AGPL-v3 后者需要附上一封版权声明 我们将他附到了LICENSE的下面
-
-如果您希望将其集成到诸如xray等代理工具中，可以修改为GPL-v3或其他
+前者是MIT所以可以变成AGPL-v3;后者需要附上一封版权声明，我们将他附到了LICENSE的下面
