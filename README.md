@@ -4,10 +4,11 @@
 
 ## 🚀 特性
 
-- Chrome TLS：[utls](https://github.com/refraction-networking/utls) `HelloChrome_Auto`
+- 抗审查: 使用utls来将行为伪装成Chrome
 - 证书：像 Reality 一样借用 `dest` 站点，不用自签
-- 认证：密码派生 X25519，握手失败就转发给 dest
-- 速度：支持自动升降级HTTP/3，大幅度提升高丢包环境下的速度。在HTTP/3不可用时自动退回2或1.1。
+- 认证：支持X25519MLKEM768，握手失败就转发给 dest
+- 速度：支持自动升降级HTTP/3，大幅度提升高丢包环境下的速度。
+在HTTP/3不可用时自动退回2或1.1。
 
 ## ⚙️ 构建
 
