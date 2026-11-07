@@ -1,0 +1,10 @@
+[socks5]
+listen = "0.0.0.0"
+port = 1080
+
+[peer]
+remote = "example.com"
+port = 443
+dest = "one.one.one.one"
+dest_port = 443
+password = "your_password"
