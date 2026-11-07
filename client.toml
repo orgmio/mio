@@ -1,8 +1,13 @@
+[log]
+enable = true
+level = "info"
+path = "mio.log"
+
 [socks5]
-listen = "0.0.0.0"
+listen = "127.0.0.1"
 port = 1080
 
-[peer]
+[server]
 server = "example.com"
 port = 443
 dest = "one.one.one.one"

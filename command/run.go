@@ -4,6 +4,8 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
+	"log/slog"
 	"os"
 
 	"github.com/orgmio/mio/client"
@@ -38,5 +40,32 @@ func Run(args []string) error {
 	if err != nil {
 		return err
 	}
+	if err := setupLog(cfg.Log); err != nil {
+		return err
+	}
 	return client.NewSOCKS5(cfg.Socks5).Run()
+}
+
+func setupLog(cfg config.LogConfig) error {
+	if !cfg.Enable {
+		slog.SetDefault(slog.New(slog.DiscardHandler))
+		return nil
+	}
+
+	var level slog.Level
+	if err := level.UnmarshalText([]byte(cfg.Level)); err != nil {
+		return fmt.Errorf("invalid log level %q: %w", cfg.Level, err)
+	}
+
+	var output io.Writer = os.Stderr
+	if cfg.Path != "" {
+		file, err := os.OpenFile(cfg.Path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+		if err != nil {
+			return fmt.Errorf("open log file %q: %w", cfg.Path, err)
+		}
+		output = file
+	}
+
+	slog.SetDefault(slog.New(slog.NewTextHandler(output, &slog.HandlerOptions{Level: level})))
+	return nil
 }

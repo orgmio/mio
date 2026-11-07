@@ -3,6 +3,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"strings"
 
@@ -10,8 +11,15 @@ import (
 )
 
 type Config struct {
+	Log    LogConfig    `toml:"log"`
 	Socks5 SOCKS5Config `toml:"socks5"`
 	Peer   PeerConfig   `toml:"peer"`
+}
+
+type LogConfig struct {
+	Enable bool   `toml:"enable"`
+	Level  string `toml:"level"`
+	Path   string `toml:"path"`
 }
 
 type SOCKS5Config struct {
@@ -34,7 +42,7 @@ func Load(path string) (Config, error) {
 	}
 	defer file.Close()
 
-	var cfg Config
+	cfg := Config{Log: LogConfig{Enable: true, Level: "info"}}
 	if err := toml.NewDecoder(file).Decode(&cfg); err != nil {
 		return Config{}, fmt.Errorf("parse configuration %q: %w", path, err)
 	}
@@ -46,6 +54,9 @@ func Load(path string) (Config, error) {
 }
 
 func (cfg *Config) Validate() error {
+	if err := new(slog.Level).UnmarshalText([]byte(cfg.Log.Level)); err != nil {
+		return fmt.Errorf("invalid [log].level %q: %w", cfg.Log.Level, err)
+	}
 	cfg.Socks5.Listen = strings.TrimSpace(cfg.Socks5.Listen)
 	if cfg.Socks5.Listen == "" {
 		return errors.New("configuration must set [socks5].listen")

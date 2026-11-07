@@ -2,7 +2,6 @@ package client
 
 import (
 	"fmt"
-	"log"
 	"log/slog"
 	"net"
 	"strconv"
@@ -11,6 +10,12 @@ import (
 	"github.com/things-go/go-socks5"
 )
 
+type slogLogger struct{}
+
+func (slogLogger) Errorf(format string, args ...any) {
+	slog.Error(fmt.Sprintf(format, args...))
+}
+
 type SOCKS5Node struct {
 	config config.SOCKS5Config
 	server *socks5.Server
@@ -18,7 +23,7 @@ type SOCKS5Node struct {
 
 func NewSOCKS5(cfg config.SOCKS5Config) *SOCKS5Node {
 	server := socks5.NewServer(
-		socks5.WithLogger(socks5.NewLogger(log.Default())),
+		socks5.WithLogger(slogLogger{}),
 	)
 	return &SOCKS5Node{config: cfg, server: server}
 }
