@@ -8,6 +8,26 @@ import (
 )
 
 func main() {
-	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug})))
-	command.PrintVersion()
+	logger := slog.New(
+		slog.NewTextHandler(
+			os.Stderr, &slog.HandlerOptions{
+				Level: slog.LevelDebug,
+			},
+		),
+	)
+	slog.SetDefault(logger)
+
+	if len(os.Args) < 2 {
+		command.Help()
+		return
+	}
+
+	switch os.Args[1] {
+	case "version":
+		command.PrintVersion()
+	case "help":
+		command.Help()
+	default:
+		command.Help()
+	}
 }

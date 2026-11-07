@@ -4,17 +4,15 @@ import (
 	"fmt"
 )
 
-func Help(){
-	fmt.Println("The MIO Proxy Protocol")
+func Help() {
 	fmt.Println("Usage:")
-	fmt.Printf("  mio [command]\n\n")
-    fmt.Println("Avaliable Commands:")
+	fmt.Println("  mio [command]\n")
+	fmt.Println("Avaliable Commands:")
 	fmt.Println("  run       Run service")
 	fmt.Println("  check     Check configuration")
 	fmt.Println("  format    Format configuration")
-	fmt.Printf("  version   Print current version of MIO\n\n")
+	fmt.Println("  version   Print current version of MIO\n")
 	fmt.Println("Flags:")
-    fmt.Println("  -c, --config stringArray             set configuration file path")
-	fmt.Printf("  -h, --help                           help for sing-box\n\n")
-	fmt.Println("Use 'mio [command] --help' for more information about a command.")
+	fmt.Println("  -c, --config stringArray             set configuration file path")
+	fmt.Println("  -h, --help                           help for mio")
 }
