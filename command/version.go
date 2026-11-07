@@ -9,13 +9,13 @@ import (
 const Version = "0.4.2"
 
 func PrintVersion() {
-	fmt.Printf("The MIO proxy protocol V%s\n\n", Version)
+	fmt.Println("The MIO proxy protocol V" + Version + "\n")
 	info, _ := debug.ReadBuildInfo()
 	settings := make(map[string]string)
 	for _, s := range info.Settings {
 		settings[s.Key] = s.Value
 	}
-	fmt.Printf("Environment=%s %s\n", runtime.Version(), runtime.GOARCH)
-	fmt.Printf("Commit Hash=%s\n", settings["vcs.revision"])
-	fmt.Printf("CGO_Enabled=%s\n", settings["CGO_ENABLED"])
+	fmt.Println("Environment=" + runtime.Version() + " " + runtime.GOARCH)
+	fmt.Println("Commit Hash=" + settings["vcs.revision"])
+	fmt.Println("CGO_Enabled=" + settings["CGO_ENABLED"])
 }

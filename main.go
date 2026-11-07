@@ -23,6 +23,11 @@ func main() {
 	}
 
 	switch os.Args[1] {
+	case "run":
+		if err := command.Run(os.Args[2:]); err != nil {
+			slog.Error("Failed to start : ", "err", err)
+			os.Exit(1)
+		}
 	case "version":
 		command.PrintVersion()
 	case "help":
