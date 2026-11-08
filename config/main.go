@@ -14,6 +14,16 @@ type Config struct {
 	Log    Log    `toml:"log"`
 	Socks5 SOCKS5 `toml:"socks5"`
 	Peer   Peer   `toml:"peer"`
+	Listen Listen `toml:"listen"`
+}
+
+// Listen 是服务端配置；设置了 listen 即以服务端模式运行。
+type Listen struct {
+	Listen   string `toml:"listen"`
+	Port     int    `toml:"port"`
+	Dest     string `toml:"dest"`
+	DestPort int    `toml:"dest_port"`
+	Password string `toml:"password"`
 }
 
 type Log struct {
@@ -61,10 +71,17 @@ func (l Log) SlogLevel() (slog.Level, error) {
 	return level, nil
 }
 
+func (cfg Config) IsServer() bool { return cfg.Listen.Listen != "" }
+
 func (cfg *Config) Validate() error {
 	if _, err := cfg.Log.SlogLevel(); err != nil {
 		return err
 	}
+	cfg.Listen.Listen = strings.TrimSpace(cfg.Listen.Listen)
+	if cfg.IsServer() {
+		return cfg.validateServer()
+	}
+
 	cfg.Socks5.Listen = strings.TrimSpace(cfg.Socks5.Listen)
 	if cfg.Socks5.Listen == "" {
 		return errors.New("configuration must set [socks5].listen")
@@ -90,6 +107,24 @@ func (cfg *Config) Validate() error {
 	}
 	if peer.Password == "" {
 		return errors.New("configuration must set [peer].password")
+	}
+	return nil
+}
+
+func (cfg *Config) validateServer() error {
+	l := &cfg.Listen
+	l.Dest = strings.TrimSpace(l.Dest)
+	if l.Port < 1 || l.Port > 65535 {
+		return errors.New("[listen].port must be between 1 and 65535")
+	}
+	if l.Dest == "" {
+		return errors.New("configuration must set [listen].dest")
+	}
+	if l.DestPort < 1 || l.DestPort > 65535 {
+		return errors.New("[listen].dest_port must be between 1 and 65535")
+	}
+	if l.Password == "" {
+		return errors.New("configuration must set [listen].password")
 	}
 	return nil
 }

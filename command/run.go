@@ -13,6 +13,7 @@ import (
 
 	"github.com/orgmio/mio/client"
 	"github.com/orgmio/mio/config"
+	"github.com/orgmio/mio/protocol"
 )
 
 func Run(args []string) error {
@@ -51,6 +52,9 @@ func Run(args []string) error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	if cfg.IsServer() {
+		return protocol.NewServer(cfg.Listen, nil).Run(ctx)
+	}
 	return client.NewSOCKS5(cfg.Socks5).Run(ctx)
 }
 
