@@ -37,7 +37,7 @@ func dialWithLog(ctx context.Context, network, addr string, request *socks5.Requ
 		return nil, err
 	}
 	slog.Debug("dial succeeded", "dest", addr)
-	return &sniConn{
+	return &Sniff{
 		Conn: conn,
 		from: request.RemoteAddr.String(),
 		dest: addr,

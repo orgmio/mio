@@ -11,7 +11,7 @@ import (
 	"crypto/tls"
 )
 
-type sniConn struct {
+type Sniff struct {
 	net.Conn
 	once sync.Once
 	from string
@@ -19,7 +19,7 @@ type sniConn struct {
 	host string
 }
 
-func (c *sniConn) logOnce(sni string) {
+func (c *Sniff) logOnce(sni string) {
 	c.once.Do(func() {
 		if sni == "" {
 			sni = c.host
@@ -32,17 +32,17 @@ func (c *sniConn) logOnce(sni string) {
 	})
 }
 
-func (c *sniConn) Write(p []byte) (int, error) {
+func (c *Sniff) Write(p []byte) (int, error) {
 	c.logOnce(parseSNI(p))
 	return c.Conn.Write(p)
 }
 
-func (c *sniConn) Close() error {
+func (c *Sniff) Close() error {
 	c.logOnce("")
 	return c.Conn.Close()
 }
 
-func (c *sniConn) CloseWrite() error {
+func (c *Sniff) CloseWrite() error {
 	if cw, ok := c.Conn.(interface{ CloseWrite() error }); ok {
 		return cw.CloseWrite()
 	}
