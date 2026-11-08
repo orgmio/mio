@@ -11,13 +11,12 @@ import (
 	"crypto/tls"
 )
 
-// sniConn 在客户端发出的第一段数据里提取 TLS SNI 并输出连接日志。
 type sniConn struct {
 	net.Conn
 	once sync.Once
 	from string
 	dest string
-	host string // SOCKS5 请求里的域名，没有 SNI 时作为回退
+	host string
 }
 
 func (c *sniConn) logOnce(sni string) {
@@ -43,7 +42,6 @@ func (c *sniConn) Close() error {
 	return c.Conn.Close()
 }
 
-// CloseWrite 保留 TCP 半关闭，避免被嵌入的接口吞掉。
 func (c *sniConn) CloseWrite() error {
 	if cw, ok := c.Conn.(interface{ CloseWrite() error }); ok {
 		return cw.CloseWrite()

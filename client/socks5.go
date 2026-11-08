@@ -62,7 +62,7 @@ func (node *SOCKS5Node) Run(ctx context.Context) error {
 		return fmt.Errorf("listen on %s: %w", address, err)
 	}
 
-	slog.Info("Listen Socks5 successfully at port "+strconv.Itoa(node.config.Port), "address", listener.Addr().String())
+	slog.Info("Listen Socks5 successfully at ", "address", listener.Addr().String())
 	go func() {
 		<-ctx.Done()
 		listener.Close()
