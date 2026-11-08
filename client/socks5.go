@@ -8,6 +8,7 @@ import (
 	"strconv"
 
 	"github.com/orgmio/mio/config"
+	"github.com/orgmio/mio/protocol"
 	"github.com/things-go/go-socks5"
 )
 
@@ -17,31 +18,48 @@ func (slogLogger) Errorf(format string, args ...any) {
 	slog.Error(fmt.Sprintf(format, args...))
 }
 
+// noResolver 不在本地解析域名，域名原样交给服务端解析。
+type noResolver struct{}
+
+func (noResolver) Resolve(ctx context.Context, _ string) (context.Context, net.IP, error) {
+	return ctx, nil, nil
+}
+
 type SOCKS5Node struct {
 	config config.SOCKS5
+	dialer *protocol.Dialer
 	server *socks5.Server
 }
 
-func NewSOCKS5(cfg config.SOCKS5) *SOCKS5Node {
-	server := socks5.NewServer(
+func NewSOCKS5(cfg config.SOCKS5, peer config.Peer) *SOCKS5Node {
+	node := &SOCKS5Node{config: cfg, dialer: protocol.NewDialer(peer)}
+	node.server = socks5.NewServer(
 		socks5.WithLogger(slogLogger{}),
-		socks5.WithDialAndRequest(dialWithLog),
+		socks5.WithResolver(noResolver{}),
+		socks5.WithDialAndRequest(node.dial),
 	)
-	return &SOCKS5Node{config: cfg, server: server}
+	return node
 }
 
-func dialWithLog(ctx context.Context, network, addr string, request *socks5.Request) (net.Conn, error) {
-	conn, err := (&net.Dialer{}).DialContext(ctx, network, addr)
+func (node *SOCKS5Node) dial(ctx context.Context, _, _ string, request *socks5.Request) (net.Conn, error) {
+	dest := request.RawDestAddr
+	host := dest.FQDN
+	if host == "" {
+		host = dest.IP.String()
+	}
+	target := net.JoinHostPort(host, strconv.Itoa(dest.Port))
+
+	conn, err := node.dialer.Dial(ctx, target)
 	if err != nil {
-		slog.Warn("dial failed", "dest", addr, "err", err)
+		slog.Warn("dial failed", "dest", target, "err", err)
 		return nil, err
 	}
-	slog.Debug("dial succeeded", "dest", addr)
+	slog.Debug("dial succeeded", "dest", target)
 	return &Sniff{
 		Conn: conn,
 		from: request.RemoteAddr.String(),
-		dest: addr,
-		host: request.RawDestAddr.FQDN,
+		dest: target,
+		host: dest.FQDN,
 	}, nil
 }
 

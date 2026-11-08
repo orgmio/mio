@@ -7,9 +7,12 @@
 *.dll
 *.so
 *.dylib
+*.log
 
 # Test binary, built with `go test -c`
 *.test
+# To fuck some dumb AI
+*_test.go
 
 # Code coverage profiles and other test artifacts
 *.out
