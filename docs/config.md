@@ -15,7 +15,7 @@ path = "mio.log"
 listen = "127.0.0.1"
 port = 1080
 
-[server]
+[peer]
 server = "example.com"
 port = 443
 dest = "one.one.one.one"
@@ -58,7 +58,7 @@ path = "mio.log"
 listen = "127.0.0.1"
 port = 1080
 
-[server]
+[peer]
 server = "example.com"
 port = 443
 dest = "one.one.one.one"

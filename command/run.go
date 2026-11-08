@@ -1,12 +1,15 @@
 package command
 
 import (
+	"context"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"log/slog"
 	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/orgmio/mio/client"
 	"github.com/orgmio/mio/config"
@@ -40,32 +43,39 @@ func Run(args []string) error {
 	if err != nil {
 		return err
 	}
-	if err := setupLog(cfg.Log); err != nil {
+	closeLog, err := setupLog(cfg.Log)
+	if err != nil {
 		return err
 	}
-	return client.NewSOCKS5(cfg.Socks5).Run()
+	defer closeLog()
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	return client.NewSOCKS5(cfg.Socks5).Run(ctx)
 }
 
-func setupLog(cfg config.LogConfig) error {
+func setupLog(cfg config.Log) (func(), error) {
 	if !cfg.Enable {
 		slog.SetDefault(slog.New(slog.DiscardHandler))
-		return nil
+		return func() {}, nil
 	}
 
-	var level slog.Level
-	if err := level.UnmarshalText([]byte(cfg.Level)); err != nil {
-		return fmt.Errorf("invalid log level %q: %w", cfg.Level, err)
+	level, err := cfg.SlogLevel()
+	if err != nil {
+		return nil, err
 	}
 
 	var output io.Writer = os.Stderr
+	closeLog := func() {}
 	if cfg.Path != "" {
 		file, err := os.OpenFile(cfg.Path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 		if err != nil {
-			return fmt.Errorf("open log file %q: %w", cfg.Path, err)
+			return nil, fmt.Errorf("open log file %q: %w", cfg.Path, err)
 		}
 		output = file
+		closeLog = func() { file.Close() }
 	}
 
 	slog.SetDefault(slog.New(slog.NewTextHandler(output, &slog.HandlerOptions{Level: level})))
-	return nil
+	return closeLog, nil
 }

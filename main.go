@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"log/slog"
 	"os"
 
@@ -11,7 +12,7 @@ func main() {
 	logger := slog.New(
 		slog.NewTextHandler(
 			os.Stderr, &slog.HandlerOptions{
-				Level: slog.LevelDebug,
+				Level: slog.LevelInfo,
 			},
 		),
 	)
@@ -25,7 +26,7 @@ func main() {
 	switch os.Args[1] {
 	case "run":
 		if err := command.Run(os.Args[2:]); err != nil {
-			logger.Error("Failed to start : ", "err", err)
+			logger.Error("Failed to run : ", "err", err)
 			os.Exit(1)
 		}
 	case "version":
@@ -33,6 +34,8 @@ func main() {
 	case "help":
 		command.Help()
 	default:
-		command.Help()
+		msg := fmt.Sprintf("unknown command %q for \"mio\"", os.Args[1])
+		fmt.Fprintf(os.Stderr, "Error: %s\nRun 'mio help' for usage.\n", msg)
+		os.Exit(1)
 	}
 }
