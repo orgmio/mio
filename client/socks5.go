@@ -36,6 +36,7 @@ func NewSOCKS5(cfg config.SOCKS5, peer config.Peer) *SOCKS5Node {
 	node.server = socks5.NewServer(
 		socks5.WithLogger(slogLogger{}),
 		socks5.WithResolver(noResolver{}),
+		socks5.WithRule(&socks5.PermitCommand{EnableConnect: true}),
 		socks5.WithDialAndRequest(node.dial),
 	)
 	return node

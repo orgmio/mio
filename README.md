@@ -34,8 +34,7 @@ mio help
 
 需要服务端和客户端同时开启TCP和UDP才可完整发挥mio的功能。
 
-建议客户端浏览器禁用HTTP/3，原因和hysteria2一致，
-在QUIC里面套QUIC会导致Hysteria2自己的流控无法识别从而出现性能问题。
+客户端 SOCKS5 仅允许 TCP CONNECT，会拒绝 UDP ASSOCIATE；因此经 SOCKS5 使用时，浏览器的 HTTP/3/QUIC 流量不会进入 mio 隧道，应回退到 TCP。
 
 DNS部分，因为该仓库只是一个代理协议的概念验证，
 
