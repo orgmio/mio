@@ -64,6 +64,14 @@ const (
 	bbrModeProbeRtt
 )
 
+type bbrRecoveryState int
+
+const (
+	bbrRecoveryStateNotInRecovery bbrRecoveryState = iota
+	bbrRecoveryStateConservation
+	bbrRecoveryStateGrowth
+)
+
 type bbrSender struct {
 	rttStats congestion.RTTStatsProvider
 	clock    Clock
