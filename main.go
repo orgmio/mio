@@ -5,7 +5,7 @@ import (
 	"log/slog"
 	"os"
 
-	"github.com/orgmio/mio/command"
+	"github.com/orgmio/mio/common"
 )
 
 func main() {
