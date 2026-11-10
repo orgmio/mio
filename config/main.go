@@ -17,7 +17,6 @@ type Config struct {
 	Listen Listen `toml:"listen"`
 }
 
-// Listen 是服务端配置；设置了 listen 即以服务端模式运行。
 type Listen struct {
 	Listen   string `toml:"listen"`
 	Port     int    `toml:"port"`

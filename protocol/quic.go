@@ -13,7 +13,6 @@ import (
 	"github.com/apernet/quic-go"
 
 	"github.com/orgmio/mio/config"
-	"github.com/orgmio/mio/internal/congestion"
 )
 
 const quicDialTimeout = 5 * time.Second
@@ -89,7 +88,6 @@ func dialQUIC(ctx context.Context, peer config.Peer) (*quicSession, error) {
 		udp.Close()
 		return nil, fmt.Errorf("quic handshake: %w", err)
 	}
-	congestion.UseBBR(conn)
 
 	session := &quicSession{conn: conn, transport: transport, udp: udp}
 	if err := session.authenticate(peer.Password); err != nil {

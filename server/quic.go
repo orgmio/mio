@@ -12,7 +12,6 @@ import (
 
 	"github.com/apernet/quic-go"
 
-	"github.com/orgmio/mio/internal/congestion"
 	"github.com/orgmio/mio/protocol"
 )
 
@@ -79,7 +78,6 @@ func (s *Server) runQUIC(ctx context.Context) error {
 
 func (s *Server) serveQUIC(ctx context.Context, conn *quic.Conn) {
 	defer conn.CloseWithError(0, "")
-	congestion.UseBBR(conn)
 	if err := s.authQUIC(ctx, conn); err != nil {
 		slog.Debug("quic auth failed", "from", conn.RemoteAddr().String(), "err", err)
 		return

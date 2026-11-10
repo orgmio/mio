@@ -1,7 +1,7 @@
 name: I was wrong, they said, finding someone new
 
 on:
-  #push:
+  push:
   workflow_dispatch:
 permissions:
   contents: write
