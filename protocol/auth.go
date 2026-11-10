@@ -4,15 +4,15 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/hkdf"
-	"crypto/rand"
 	"crypto/sha256"
 	"encoding/binary"
+
+	"github.com/orgmio/mio/protocol/padding"
 )
 
 const (
-	protocolVersion = 1
+	protocolVersion = 2
 	authLabel       = "mio auth"
-	maxAuthPadding  = 48
 )
 
 // authAEAD 的密钥由密码和真站给出的 server_random 派生，换一条连接就无法重放。
@@ -34,11 +34,15 @@ func authRecord(password string, serverRandom, share []byte) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	padding := make([]byte, 16+int(randByte())%maxAuthPadding)
-	if _, err := rand.Read(padding); err != nil {
+	paddingLength, err := padding.RandomInt(32, 1024)
+	if err != nil {
 		return nil, err
 	}
-	plain := append(append([]byte{protocolVersion}, share...), padding...)
+	paddingBytes, err := padding.RandomBytes(paddingLength)
+	if err != nil {
+		return nil, err
+	}
+	plain := append(append([]byte{protocolVersion}, share...), paddingBytes...)
 
 	body := aead.Seal(nil, make([]byte, aead.NonceSize()), plain, nil)
 	record := []byte{RecordAppData, 0x03, 0x03, 0, 0}
@@ -53,14 +57,8 @@ func VerifyAuth(password string, serverRandom, body []byte) ([]byte, bool) {
 		return nil, false
 	}
 	plain, err := aead.Open(nil, make([]byte, aead.NonceSize()), body, nil)
-	if err != nil || len(plain) < 1+clientShareSize || plain[0] != protocolVersion {
+	if err != nil || len(plain) < 1+clientShareSize+32 || len(plain) > 1+clientShareSize+1024 || plain[0] != protocolVersion {
 		return nil, false
 	}
 	return plain[1 : 1+clientShareSize], true
-}
-
-func randByte() byte {
-	var b [1]byte
-	rand.Read(b[:])
-	return b[0]
 }

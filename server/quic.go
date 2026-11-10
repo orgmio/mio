@@ -78,6 +78,7 @@ func (s *Server) runQUIC(ctx context.Context) error {
 
 func (s *Server) serveQUIC(ctx context.Context, conn *quic.Conn) {
 	defer conn.CloseWithError(0, "")
+	protocol.ConfigureBBR(conn)
 	if err := s.authQUIC(ctx, conn); err != nil {
 		slog.Debug("quic auth failed", "from", conn.RemoteAddr().String(), "err", err)
 		return

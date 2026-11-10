@@ -13,6 +13,7 @@ import (
 	"github.com/apernet/quic-go"
 
 	"github.com/orgmio/mio/config"
+	"github.com/orgmio/mio/internal/congestion/bbr"
 )
 
 const quicDialTimeout = 5 * time.Second
@@ -52,6 +53,11 @@ func quicClientConfig(ipv4 bool) *quic.Config {
 	}
 }
 
+// ConfigureBBR 在 QUIC 握手完成后安装 BBR 拥塞控制器。
+func ConfigureBBR(conn *quic.Conn) {
+	conn.SetCongestionControl(bbr.NewBbrSender(bbr.DefaultClock{}, conn.InitialPacketSize()))
+}
+
 func dialQUIC(ctx context.Context, peer config.Peer) (*quicSession, error) {
 	addr, err := net.ResolveUDPAddr("udp", net.JoinHostPort(peer.Server, strconv.Itoa(peer.Port)))
 	if err != nil {
@@ -89,6 +95,7 @@ func dialQUIC(ctx context.Context, peer config.Peer) (*quicSession, error) {
 		return nil, fmt.Errorf("quic handshake: %w", err)
 	}
 
+	ConfigureBBR(conn)
 	session := &quicSession{conn: conn, transport: transport, udp: udp}
 	if err := session.authenticate(peer.Password); err != nil {
 		session.Close()

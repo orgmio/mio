@@ -29,6 +29,9 @@ func DialTCP(ctx context.Context, peer config.Peer, target string) (net.Conn, er
 		conn.Close()
 		return nil, fmt.Errorf("peer %s: %w", address, err)
 	}
+	if p, ok := secure.(interface{ SetNextPadding(int, int) }); ok {
+		p.SetNextPadding(16, 512)
+	}
 	if err := WriteRequest(secure, target); err != nil {
 		conn.Close()
 		return nil, fmt.Errorf("peer %s: send request: %w", address, err)

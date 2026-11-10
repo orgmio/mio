@@ -6,7 +6,7 @@ import (
 	"runtime/debug"
 )
 
-const Version = "0.4.4"
+const Version = "0.4.5"
 
 func PrintVersion() {
 	fmt.Println("The MIO proxy protocol V" + Version + "\n")

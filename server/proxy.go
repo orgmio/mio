@@ -28,11 +28,17 @@ func (s *Server) proxy(ctx context.Context, conn net.Conn) {
 	remote, err := dialer.DialContext(ctx, "tcp", target)
 	if err != nil {
 		slog.Warn("dial target failed", "from", from, "target", target, "err", err)
+		if p, ok := conn.(interface{ SetNextPadding(int, int) }); ok {
+			p.SetNextPadding(16, 512)
+		}
 		protocol.WriteReply(conn, false)
 		return
 	}
 	defer remote.Close()
 
+	if p, ok := conn.(interface{ SetNextPadding(int, int) }); ok {
+		p.SetNextPadding(16, 512)
+	}
 	if err := protocol.WriteReply(conn, true); err != nil {
 		return
 	}
