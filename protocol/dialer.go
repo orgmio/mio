@@ -52,6 +52,45 @@ func NewDialer(peer config.Peer) *Dialer {
 	return &Dialer{peer: peer}
 }
 
+func (d *Dialer) WarmUp(ctx context.Context) {
+	for ctx.Err() == nil {
+		d.mu.Lock()
+		selected, probing := d.selected, d.probing
+		d.mu.Unlock()
+		if selected != transportUnknown {
+			return
+		}
+		if !probing {
+			session, err := dialQUIC(ctx, d.peer)
+			if err == nil {
+				d.mu.Lock()
+				if ctx.Err() == nil && d.selected == transportUnknown && !d.probing {
+					d.session = session
+					d.selected = transportQUIC
+					d.nextProbe = time.Now().Add(minProbeInterval + rand.N(maxProbeInterval-minProbeInterval))
+					d.mu.Unlock()
+					go func() {
+						<-ctx.Done()
+						d.drop(session)
+					}()
+					return
+				}
+				d.mu.Unlock()
+				session.Close()
+			} else if ctx.Err() == nil {
+				slog.Debug("quic warm-up failed", "err", err)
+			}
+		}
+		timer := time.NewTimer(5 * time.Second)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return
+		case <-timer.C:
+		}
+	}
+}
+
 func (d *Dialer) Dial(ctx context.Context, target string) (net.Conn, error) {
 	d.mu.Lock()
 	if d.probing {

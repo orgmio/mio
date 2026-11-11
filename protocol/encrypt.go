@@ -19,8 +19,6 @@ const (
 	frameReady byte = 0
 	frameData  byte = 1
 	frameClose byte = 2
-	frameTLS   byte = 3
-	framePad   byte = 4
 
 	maxFramePayload = 16384 - 1
 	frameHeaderSize = 3
@@ -56,25 +54,20 @@ func newGCM(ikm, salt []byte, label string) (cipher.AEAD, error) {
 	return cipher.NewGCM(block)
 }
 
-// Encrypt 将普通数据封装为带长度和填充的 TLS Application Data 记录；确认目标 TLS 握手后，完整 TLS record 原样透传。
+// Encrypt 将数据封装为带长度和填充的 TLS Application Data 记录。
 type Encrypt struct {
 	net.Conn
-	reader           *bufio.Reader
-	send             cipher.AEAD
-	recv             cipher.AEAD
-	sendSeq          uint64
-	recvSeq          uint64
-	sendDataFrames   uint64
-	pending          []byte
-	writePending     []byte
-	tlsSend          bool
-	tlsRecv          bool
-	tlsSendDetected  bool
-	tlsRecvDetected  bool
-	rawTLSIncomplete bool
-	nextPadding      *padding.Range
-	eof              bool
-	writeMu          sync.Mutex
+	reader         *bufio.Reader
+	send           cipher.AEAD
+	recv           cipher.AEAD
+	sendSeq        uint64
+	recvSeq        uint64
+	sendDataFrames uint64
+	pending        []byte
+	writePending   []byte
+	nextPadding    *padding.Range
+	eof            bool
+	writeMu        sync.Mutex
 }
 
 func newEncrypt(conn net.Conn, reader *bufio.Reader, send, recv cipher.AEAD) *Encrypt {
@@ -127,12 +120,6 @@ func (c *Encrypt) CloseWrite() error {
 	if err := c.flushWriteBuffer(true); err != nil {
 		return err
 	}
-	if c.rawTLSIncomplete {
-		if cw, ok := c.Conn.(interface{ CloseWrite() error }); ok {
-			return cw.CloseWrite()
-		}
-		return c.Conn.Close()
-	}
 	return c.writeFrame(frameClose, nil)
 }
 
@@ -148,13 +135,6 @@ func (c *Encrypt) Read(p []byte) (int, error) {
 		switch typ {
 		case frameData:
 			c.pending = payload
-			if len(payload) >= RecordHeaderSize+1 && padding.HasHandshakeStart(payload[:RecordHeaderSize], payload[RecordHeaderSize:]) {
-				c.tlsRecvDetected = true
-			}
-		case frameTLS:
-			c.pending = payload
-		case framePad:
-			continue
 		case frameClose:
 			c.eof = true
 		default:
@@ -180,10 +160,6 @@ func (c *Encrypt) Write(p []byte) (int, error) {
 }
 
 func (c *Encrypt) writeFrame(typ byte, payload []byte) error {
-	return c.writeFrameWithPadding(typ, payload, false)
-}
-
-func (c *Encrypt) writeFrameWithPadding(typ byte, payload []byte, padLikeData bool) error {
 	if len(payload) > 0xffff {
 		return errors.New("frame payload too large")
 	}
@@ -194,7 +170,7 @@ func (c *Encrypt) writeFrameWithPadding(typ byte, payload []byte, padLikeData bo
 		pad, err = padding.RandomPadding(c.nextPadding.Minimum, c.nextPadding.Maximum, maxPadding)
 		c.nextPadding = nil
 	} else {
-		pad, err = padding.FramePadding(len(payload), c.sendDataFrames, typ == frameReady, typ == frameData || padLikeData, maxPadding)
+		pad, err = padding.FramePadding(len(payload), c.sendDataFrames, typ == frameReady, typ == frameData, maxPadding)
 	}
 	if err != nil {
 		return err
@@ -224,14 +200,6 @@ func (c *Encrypt) flushWriteBuffer(final bool) error {
 			if !final && padding.IsPossibleRecordPrefix(c.writePending) {
 				return nil
 			}
-			if final && c.tlsSend {
-				if err := writeAll(c.Conn, c.writePending); err != nil {
-					return err
-				}
-				c.rawTLSIncomplete = true
-				c.writePending = nil
-				return nil
-			}
 			return c.writeEncryptedPending(len(c.writePending))
 		}
 
@@ -241,29 +209,11 @@ func (c *Encrypt) flushWriteBuffer(final bool) error {
 				if !final {
 					return nil
 				}
-				if c.tlsSend {
-					if err := writeAll(c.Conn, c.writePending); err != nil {
-						return err
-					}
-					c.rawTLSIncomplete = true
-					c.writePending = nil
-					return nil
-				}
 				return c.writeEncryptedPending(len(c.writePending))
 			}
 			record := c.writePending[:recordLength]
-			if c.tlsSend || (c.tlsSendDetected && record[0] == RecordAppData) {
-				c.tlsSend = true
-				if err := c.writeTLSRecord(record); err != nil {
-					return err
-				}
-			} else {
-				if err := c.writeEncrypted(record); err != nil {
-					return err
-				}
-				if padding.IsHandshakeStart(record) {
-					c.tlsSendDetected = true
-				}
+			if err := c.writeEncrypted(record); err != nil {
+				return err
 			}
 			c.consumeWritePending(recordLength)
 			continue
@@ -271,19 +221,6 @@ func (c *Encrypt) flushWriteBuffer(final bool) error {
 
 		return c.writeEncryptedPending(min(len(c.writePending), maxFramePayload))
 	}
-	return nil
-}
-
-func (c *Encrypt) writeTLSRecord(record []byte) error {
-	if c.sendDataFrames < 8 {
-		if err := c.writeFrameWithPadding(framePad, nil, true); err != nil {
-			return err
-		}
-	}
-	if err := writeAll(c.Conn, record); err != nil {
-		return err
-	}
-	c.sendDataFrames++
 	return nil
 }
 
@@ -327,7 +264,7 @@ func writeAll(w io.Writer, p []byte) error {
 	return nil
 }
 
-// readFrame 读取并解密一条记录；认证后仅在已确认 TLS 握手的方向接受未套 AEAD 的 TLS ApplicationData record。
+// readFrame 读取并解密一条记录。
 func (c *Encrypt) readFrame(skipForeign bool) (byte, []byte, error) {
 	for {
 		header := make([]byte, RecordHeaderSize)
@@ -347,11 +284,6 @@ func (c *Encrypt) readFrame(skipForeign bool) (byte, []byte, error) {
 		if err != nil {
 			if skipForeign {
 				continue
-			}
-			record := append(header, body...)
-			if c.tlsRecv || (c.tlsRecvDetected && header[0] == RecordAppData) {
-				c.tlsRecv = true
-				return frameTLS, record, nil
 			}
 			return 0, nil, errors.New("decrypt record failed")
 		}

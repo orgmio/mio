@@ -11,7 +11,7 @@ import (
 )
 
 const (
-	protocolVersion = 2
+	protocolVersion = 3
 	authLabel       = "mio auth"
 )
 

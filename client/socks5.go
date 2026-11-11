@@ -80,8 +80,11 @@ func (node *SOCKS5Node) Run(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("listen on %s: %w", address, err)
 	}
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 
 	slog.Info("Listen Socks5 successfully at ", "address", listener.Addr().String())
+	go node.dialer.WarmUp(ctx)
 	go func() {
 		<-ctx.Done()
 		listener.Close()

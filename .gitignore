@@ -40,3 +40,6 @@ mio.log
 
 # Binary
 mio
+
+# Config file
+*.toml

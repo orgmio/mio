@@ -4,60 +4,25 @@
 
 ## 先看一张图
 
-<svg xmlns="http://www.w3.org/2000/svg" width="900" height="430" viewBox="0 0 900 430" role="img" aria-labelledby="title desc">
-  <title id="title">mio连接选择示意图</title>
-  <desc id="desc">本地应用通过SOCKS5把请求交给mio客户端，客户端在探测时并行建立TCP和QUIC连接，选择一条交给应用；之后定期重新比较。</desc>
-  <defs>
-    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
-      <path d="M0,0 L0,6 L9,3 z" fill="#334155"/>
-    </marker>
-    <style>
-      .box { fill: #f8fafc; stroke: #334155; stroke-width: 2; rx: 10; }
-      .probe { fill: #ecfeff; stroke: #0e7490; stroke-width: 2; rx: 10; }
-      .text { font: 16px sans-serif; fill: #0f172a; text-anchor: middle; }
-      .small { font: 13px sans-serif; fill: #334155; text-anchor: middle; }
-      .line { stroke: #334155; stroke-width: 2; fill: none; marker-end: url(#arrow); }
-      .race { stroke: #0e7490; stroke-width: 2; fill: none; marker-end: url(#arrow); }
-    </style>
-  </defs>
-  <rect class="box" x="30" y="160" width="155" height="70"/>
-  <text class="text" x="107" y="190">应用程序</text>
-  <text class="small" x="107" y="213">发起 SOCKS5 CONNECT</text>
+```mermaid
+flowchart LR
+    app["应用程序"] -->|"SOCKS5 CONNECT"| client["mio 客户端"]
+    client -->|"探测时并行尝试"| tcp["TCP 代理连接"]
+    client -->|"预热复用或探测"| quic["QUIC stream"]
+    tcp --> target["目标网站"]
+    quic --> target
+```
 
-  <rect class="box" x="250" y="160" width="175" height="70"/>
-  <text class="text" x="337" y="190">mio 客户端</text>
-  <text class="small" x="337" y="213">选择 TCP 或 QUIC</text>
-  <path class="line" d="M185 195 H245"/>
-
-  <rect class="probe" x="505" y="55" width="170" height="70"/>
-  <text class="text" x="590" y="85">TCP 代理连接</text>
-  <text class="small" x="590" y="108">握手、认证、连接目标</text>
-
-  <rect class="probe" x="505" y="265" width="170" height="70"/>
-  <text class="text" x="590" y="295">QUIC stream</text>
-  <text class="small" x="590" y="318">会话认证、连接目标</text>
-
-  <rect class="box" x="730" y="160" width="145" height="70"/>
-  <text class="text" x="802" y="190">目标网站</text>
-  <text class="small" x="802" y="213">只使用获选连接</text>
-
-  <path class="race" d="M425 178 C455 150 468 100 500 95"/>
-  <path class="race" d="M425 212 C455 240 468 290 500 295"/>
-  <path class="line" d="M675 90 C710 105 712 158 725 177"/>
-  <path class="line" d="M675 300 C710 285 712 232 725 213"/>
-
-  <text class="small" x="590" y="385">首次与周期探测：两路同时尝试，先成功的连接先返回</text>
-  <text class="small" x="590" y="407">另一条随后关闭；不复制或重发应用数据</text>
-</svg>
+探测时先成功的连接会交给应用，另一条随后关闭；应用数据不会复制或重发。
 
 ## 第一次连接
 
-应用程序通过本地 SOCKS5 发起 TCP `CONNECT`。mio 会同时试两条路：
+客户端启动后会在后台预热 QUIC 连接。应用程序通过本地 SOCKS5 发起 TCP `CONNECT` 时，如果预热已经成功，mio 会优先复用该连接；如果尚未选择传输方式，mio 会同时尝试两条路：
 
 - **TCP 路**：连接 mio 服务端，经 uTLS 与伪装站握手；发送认证信息，服务端通过认证后接管连接；然后连接目标网站。
 - **QUIC 路**：连接 mio 服务端的 UDP 端口，完成 QUIC 和 mio 会话认证；再通过一个 QUIC stream 请求服务端连接同一个目标网站。
 
-哪条路先把代理连接建好、收到目标连接成功的应答，mio 就先把那条连接交给应用。另一条路即使后来成功，也会关闭。
+并行探测时，哪条路先把代理连接建好、收到目标连接成功的应答，mio 就先把那条连接交给应用。另一条路即使后来成功，也会关闭。
 
 应用的数据只通过交给应用的那一条连接发送，不会同时复制到 TCP 和 QUIC。探测期间，两条路可能各自让服务端尝试连接同一个目标；输家会很快关闭，因此目标端可能看到一次额外的短连接。
 
@@ -82,9 +47,11 @@ mio 会在每次探测后随机等待约 10 到 30 分钟，再用新的目标�
 
 ## TLS 数据怎么处理
 
-TCP 代理连接进入数据阶段后，mio 会先用自己的 AEAD 保护目标 TLS 的 ClientHello 和 ServerHello 等握手 record。双方确认 TLS 握手开始后，目标 TLS 已加密的 Application Data record 会按原字节透传，不再套一层 mio AEAD；普通非 TLS 数据仍使用 mio AEAD。
+TCP 代理连接进入数据阶段后，mio 使用自己的 AEAD 保护所有数据，包括目标 TLS 的握手和应用数据。透明代理没有目标 TLS 会话密钥，无法验证 TLS 1.3 中加密的 Finished 消息是否有效，因此不能仅凭 record 外观确认握手完成，也不会自动切换到直传。实际的内层握手验证仍由应用程序和目标服务端完成。
 
-前几个方向性数据 record 会额外伴随随机长度的 mio 填充 record。它们由对端识别并丢弃，不会转发给目标网站。目标 TLS record 自身的长度不能随意改写，否则会破坏 TLS；因此这类填充只能改变附近的流量形态，不能保证每个包都与真实 TLS 握手等长，也不能保证完全消除 TLS-in-TLS 特征。
+前几个方向性数据 record 带有随机填充，由对端去除，不会转发给目标网站。这只能降低部分长度特征，不能保证完全消除 TLS-in-TLS 特征；持续使用外层加密也会增加处理和传输开销。
+
+TCP 认证协议版本已更新，客户端和服务端需要同时升级；旧版和新版之间不能建立 TCP 代理连接。
 
 ## UDP 限制
 

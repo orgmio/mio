@@ -97,7 +97,7 @@ func dialQUIC(ctx context.Context, peer config.Peer) (*quicSession, error) {
 
 	ConfigureBBR(conn)
 	session := &quicSession{conn: conn, transport: transport, udp: udp}
-	if err := session.authenticate(peer.Password); err != nil {
+	if err := session.authenticate(ctx, peer.Password); err != nil {
 		session.Close()
 		return nil, fmt.Errorf("quic auth: %w", err)
 	}
@@ -105,20 +105,26 @@ func dialQUIC(ctx context.Context, peer config.Peer) (*quicSession, error) {
 }
 
 // authenticate 在首个 stream 上交换绑定 TLS 导出密钥的 HMAC，双方都证明持有密码。
-func (s *quicSession) authenticate(password string) error {
+func (s *quicSession) authenticate(parent context.Context, password string) error {
 	state := s.conn.ConnectionState()
 	exporter, err := state.TLS.ExportKeyingMaterial(QUICExporterLabel, nil, 32)
 	if err != nil {
 		return err
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), QUICAuthTimeout)
+	ctx, cancel := context.WithTimeout(parent, QUICAuthTimeout)
 	defer cancel()
 	stream, err := s.conn.OpenStreamSync(ctx)
 	if err != nil {
 		return err
 	}
 	defer stream.CancelRead(0)
-	stream.SetDeadline(time.Now().Add(QUICAuthTimeout))
+	deadline, _ := ctx.Deadline()
+	stream.SetDeadline(deadline)
+	stop := context.AfterFunc(ctx, func() {
+		stream.CancelRead(0)
+		stream.CancelWrite(0)
+	})
+	defer stop()
 
 	if _, err := stream.Write(QUICProof(password, QUICClientLabel, exporter)); err != nil {
 		return err
