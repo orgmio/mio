@@ -123,15 +123,16 @@ func (d *Dialer) dialSelected(ctx context.Context, target string, selected trans
 		slog.Debug("h3 stream failed, falling back to tcp", "err", err)
 	}
 
-	conn, err := DialTCP(ctx, d.peer, target)
-	if err == nil || errors.Is(err, ErrConnectFailed) || ctx.Err() != nil {
-		return conn, err
+	conn, tcpErr := DialTCP(ctx, d.peer, target)
+	if tcpErr == nil || errors.Is(tcpErr, ErrConnectFailed) || ctx.Err() != nil {
+		return conn, tcpErr
 	}
 	owned := false
 	if session == nil || session.conn.Context().Err() != nil {
-		session, err = dialQUIC(ctx, d.peer)
-		if err != nil {
-			return nil, err
+		var quicErr error
+		session, quicErr = dialQUIC(ctx, d.peer)
+		if quicErr != nil {
+			return nil, errors.Join(tcpErr, quicErr)
 		}
 		owned = true
 	}
@@ -149,7 +150,7 @@ func (d *Dialer) dialSelected(ctx context.Context, target string, selected trans
 	if session.conn.Context().Err() != nil {
 		d.drop(session)
 	}
-	return nil, err
+	return nil, errors.Join(tcpErr, quicErr)
 }
 
 func (d *Dialer) drop(session *quicSession) {
@@ -253,29 +254,27 @@ func (d *Dialer) finishProbeLater(results <-chan dialResult, completed []dialRes
 	if quic := samples[transportQUIC]; quic.err == nil {
 		d.quicLatency = smoothLatency(d.quicLatency, quic.elapsed)
 	}
-	selected := winner
+	nextSelected := winner
 	if samples[transportTCP].err == nil && samples[transportQUIC].err == nil {
 		if d.quicLatency < d.tcpLatency {
-			selected = transportQUIC
+			nextSelected = transportQUIC
 		} else {
-			selected = transportTCP
+			nextSelected = transportTCP
 		}
 	}
-	if selected == transportQUIC && samples[transportQUIC].err == nil {
+	if nextSelected == transportQUIC && samples[transportQUIC].err == nil {
 		d.session = samples[transportQUIC].session
 	}
-	d.selected = selected
+	d.selected = nextSelected
 	d.mu.Unlock()
 
 	for _, result := range samples {
-		if result.err != nil || result.conn == nil {
+		if result.err != nil || result.conn == nil || result.transport == winner {
 			continue
 		}
-		if result.transport != winner {
-			result.conn.Close()
-			if result.owned && result.transport != selected {
-				result.session.Close()
-			}
+		result.conn.Close()
+		if result.owned && result.transport != nextSelected {
+			result.session.Close()
 		}
 	}
 }

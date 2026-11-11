@@ -194,10 +194,10 @@ func (c *Encrypt) writeFrame(typ byte, payload []byte) error {
 	return writeAll(c.Conn, record)
 }
 
-func (c *Encrypt) flushWriteBuffer(final bool) error {
+func (c *Encrypt) flushWriteBuffer(closing bool) error {
 	for len(c.writePending) > 0 {
 		if len(c.writePending) < RecordHeaderSize {
-			if !final && padding.IsPossibleRecordPrefix(c.writePending) {
+			if !closing && padding.IsPossibleRecordPrefix(c.writePending) {
 				return nil
 			}
 			return c.writeEncryptedPending(len(c.writePending))
@@ -206,16 +206,14 @@ func (c *Encrypt) flushWriteBuffer(final bool) error {
 		recordLength, isTLSRecord := padding.RecordLength(c.writePending)
 		if isTLSRecord {
 			if len(c.writePending) < recordLength {
-				if !final {
+				if !closing {
 					return nil
 				}
 				return c.writeEncryptedPending(len(c.writePending))
 			}
-			record := c.writePending[:recordLength]
-			if err := c.writeEncrypted(record); err != nil {
+			if err := c.writeEncryptedPending(recordLength); err != nil {
 				return err
 			}
-			c.consumeWritePending(recordLength)
 			continue
 		}
 

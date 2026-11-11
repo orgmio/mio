@@ -16,11 +16,11 @@ func (s *Server) relay(client, dest net.Conn) (net.Conn, bool) {
 	var serverRandom atomic.Pointer[[]byte]
 	var clientRandom []byte // 仅在客户端方向的转发协程中读写
 	var share []byte
-	var authenticated atomic.Bool
+	var connectionClaimed atomic.Bool
 
-	done := make(chan struct{})
+	camouflageStopped := make(chan struct{})
 	go func() {
-		defer close(done)
+		defer close(camouflageStopped)
 		protocol.CopyRecords(client, bufio.NewReader(dest), func(header, body []byte) bool {
 			// 遇到 HelloRetryRequest 时会有两条 ServerHello，以最后一条为准。
 			if header[0] == protocol.RecordHandshake && len(body) >= 38 && body[0] == protocol.HandshakeServerHello {
@@ -29,7 +29,7 @@ func (s *Server) relay(client, dest net.Conn) (net.Conn, bool) {
 			}
 			return false
 		})
-		if !authenticated.Load() {
+		if !connectionClaimed.Load() {
 			client.Close()
 		}
 	}()
@@ -47,17 +47,15 @@ func (s *Server) relay(client, dest net.Conn) (net.Conn, bool) {
 		return ok
 	})
 
-	if errors.Is(err, protocol.ErrAuthenticated) {
-		authenticated.Store(true)
-		dest.Close()
-		<-done // 等真站方向的转发彻底停止，避免之后与上层写入交错
-		if clientRandom == nil {
-			return nil, false
-		}
-		conn, err := protocol.Accept(client, clientReader, s.cfg.Password, clientRandom, *serverRandom.Load(), share)
-		return conn, err == nil
+	authenticated := errors.Is(err, protocol.ErrAuthenticated)
+	if authenticated {
+		connectionClaimed.Store(true)
 	}
 	dest.Close()
-	<-done
-	return nil, false
+	<-camouflageStopped
+	if !authenticated || clientRandom == nil {
+		return nil, false
+	}
+	conn, err := protocol.Accept(client, clientReader, s.cfg.Password, clientRandom, *serverRandom.Load(), share)
+	return conn, err == nil
 }
