@@ -2,7 +2,6 @@ package server
 
 import (
 	"context"
-	"crypto/hmac"
 	"crypto/tls"
 	"io"
 	"log/slog"
@@ -39,7 +38,7 @@ func (s *Server) runQUIC(ctx context.Context) error {
 		slog.Warn("resolve dest udp failed, unmarked quic traffic will be dropped", "err", err)
 		dest = nil
 	}
-	d := newDemux(sock, s.cfg.Password, dest)
+	d := newDemux(sock, s.key.PublicKey(), dest)
 	go d.run(ctx)
 
 	transport := &quic.Transport{Conn: d.virtual}
@@ -95,7 +94,7 @@ func (s *Server) serveQUIC(ctx context.Context, conn *quic.Conn) {
 	}
 }
 
-// authQUIC 校验客户端在首个 stream 上发来的、绑定 TLS 导出密钥的 HMAC，并回送服务端的证明。
+// authQUIC 校验客户端在首个 stream 上发来的临时公钥与证明（绑定 TLS 导出密钥），并回送只有持有私钥才能算出的服务端证明。
 func (s *Server) authQUIC(ctx context.Context, conn *quic.Conn) error {
 	authCtx, cancel := context.WithTimeout(ctx, quicauth.Timeout)
 	defer cancel()
@@ -106,7 +105,7 @@ func (s *Server) authQUIC(ctx context.Context, conn *quic.Conn) error {
 	defer stream.CancelRead(0)
 	stream.SetDeadline(time.Now().Add(quicauth.Timeout))
 
-	got := make([]byte, 32)
+	got := make([]byte, quicauth.ClientMessageSize)
 	if _, err := io.ReadFull(stream, got); err != nil {
 		return err
 	}
@@ -115,10 +114,11 @@ func (s *Server) authQUIC(ctx context.Context, conn *quic.Conn) error {
 	if err != nil {
 		return err
 	}
-	if !hmac.Equal(got, quicauth.Proof(s.cfg.Password, quicauth.ClientLabel, exporter)) {
-		return io.ErrUnexpectedEOF
+	reply, err := quicauth.ServerAuth(s.key, exporter, got)
+	if err != nil {
+		return err
 	}
-	if _, err := stream.Write(quicauth.Proof(s.cfg.Password, quicauth.ServerLabel, exporter)); err != nil {
+	if _, err := stream.Write(reply); err != nil {
 		return err
 	}
 	return stream.Close()

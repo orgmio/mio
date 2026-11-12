@@ -8,6 +8,8 @@ import (
 	"strings"
 
 	"github.com/pelletier/go-toml/v2"
+
+	"github.com/orgmio/mio/protocol"
 )
 
 type Config struct {
@@ -22,7 +24,7 @@ type Inbound struct {
 	ListenPort int    `toml:"listen_port"`
 	Dest       string `toml:"dest"`
 	DestPort   int    `toml:"dest_port"`
-	Password   string `toml:"password"`
+	PrivateKey string `toml:"private_key"`
 }
 
 type Log struct {
@@ -40,7 +42,7 @@ type Outbound struct {
 	ServerPort      int    `toml:"server_port"`
 	Dest            string `toml:"dest"`
 	DestPort        int    `toml:"dest_port"`
-	Password        string `toml:"password"`
+	PublicKey       string `toml:"public_key"`
 }
 
 func Load(path string) (Config, error) {
@@ -108,8 +110,11 @@ func (cfg *Config) Validate() error {
 	if !validPort(out.DestPort) {
 		return errors.New("[outbounds].dest_port must be between 1 and 65535")
 	}
-	if out.Password == "" {
-		return errors.New("configuration must set [outbounds].password")
+	if out.PublicKey == "" {
+		return errors.New("configuration must set [outbounds].public_key (run `mio keygen`)")
+	}
+	if _, err := protocol.ParsePublicKey(out.PublicKey); err != nil {
+		return fmt.Errorf("[outbounds].public_key: %w", err)
 	}
 	return nil
 }
@@ -126,8 +131,11 @@ func (cfg *Config) validateServer() error {
 	if !validPort(in.DestPort) {
 		return errors.New("[inbounds].dest_port must be between 1 and 65535")
 	}
-	if in.Password == "" {
-		return errors.New("configuration must set [inbounds].password")
+	if in.PrivateKey == "" {
+		return errors.New("configuration must set [inbounds].private_key (run `mio keygen`)")
+	}
+	if _, err := protocol.ParsePrivateKey(in.PrivateKey); err != nil {
+		return fmt.Errorf("[inbounds].private_key: %w", err)
 	}
 	return nil
 }

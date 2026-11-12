@@ -15,8 +15,8 @@ import (
 func (s *Server) relay(client, dest net.Conn) (net.Conn, bool) {
 	clientReader := bufio.NewReader(client)
 	var serverRandom atomic.Pointer[[]byte]
-	var clientRandom []byte // 仅在客户端方向的转发协程中读写
-	var share []byte
+	var clientRandom, clientKeyShare []byte // 仅在客户端方向的转发协程中读写
+	var shared, share []byte
 	var connectionClaimed atomic.Bool
 
 	camouflageStopped := make(chan struct{})
@@ -38,13 +38,14 @@ func (s *Server) relay(client, dest net.Conn) (net.Conn, bool) {
 	err := tlsrecord.CopyRecords(dest, clientReader, func(header, body []byte) bool {
 		if header[0] == tlsrecord.TypeHandshake && len(body) >= 38 && body[0] == tlsrecord.HandshakeClientHello {
 			clientRandom = bytes.Clone(body[6:38])
+			clientKeyShare, _ = tlsrecord.X25519KeyShare(body)
 		}
 		random := serverRandom.Load()
-		if random == nil || header[0] != tlsrecord.TypeAppData {
+		if random == nil || clientKeyShare == nil || header[0] != tlsrecord.TypeAppData {
 			return false
 		}
 		var ok bool
-		share, ok = protocol.VerifyAuth(s.cfg.Password, *random, header, body)
+		shared, share, ok = protocol.VerifyAuth(s.key, clientKeyShare, clientRandom, *random, header, body)
 		return ok
 	})
 
@@ -57,6 +58,6 @@ func (s *Server) relay(client, dest net.Conn) (net.Conn, bool) {
 	if !authenticated || clientRandom == nil {
 		return nil, false
 	}
-	conn, err := protocol.Accept(client, clientReader, s.cfg.Password, clientRandom, *serverRandom.Load(), share)
+	conn, err := protocol.Accept(client, clientReader, shared, clientRandom, *serverRandom.Load(), share)
 	return conn, err == nil
 }

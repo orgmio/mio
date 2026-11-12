@@ -2,6 +2,7 @@ package client
 
 import (
 	"context"
+	"crypto/ecdh"
 	"crypto/hmac"
 	"crypto/tls"
 	"fmt"
@@ -70,7 +71,7 @@ func dialQUIC(ctx context.Context, peer protocol.Peer) (*quicSession, error) {
 	if err != nil {
 		return nil, err
 	}
-	marker, err := quicauth.NewMarker(peer.Password)
+	marker, err := quicauth.NewMarker(peer.PublicKey)
 	if err != nil {
 		udp.Close()
 		return nil, err
@@ -96,15 +97,15 @@ func dialQUIC(ctx context.Context, peer protocol.Peer) (*quicSession, error) {
 
 	congestion.UseBBR(conn)
 	session := &quicSession{conn: conn, transport: transport, udp: udp}
-	if err := session.authenticate(ctx, peer.Password); err != nil {
+	if err := session.authenticate(ctx, peer.PublicKey); err != nil {
 		session.Close()
-		return nil, fmt.Errorf("quic auth: %w", err)
+		return nil, fmt.Errorf("quic auth failed (wrong public key, or server is not running mio %s): %w", protocol.Version, err)
 	}
 	return session, nil
 }
 
 // authenticate 在首个 stream 上交换绑定 TLS 导出密钥的 HMAC，双方都证明持有密码。
-func (s *quicSession) authenticate(parent context.Context, password string) error {
+func (s *quicSession) authenticate(parent context.Context, server *ecdh.PublicKey) error {
 	state := s.conn.ConnectionState()
 	exporter, err := state.TLS.ExportKeyingMaterial(quicauth.ExporterLabel, nil, 32)
 	if err != nil {
@@ -125,14 +126,18 @@ func (s *quicSession) authenticate(parent context.Context, password string) erro
 	})
 	defer stop()
 
-	if _, err := stream.Write(quicauth.Proof(password, quicauth.ClientLabel, exporter)); err != nil {
+	message, expected, err := quicauth.ClientAuth(server, exporter)
+	if err != nil {
 		return err
 	}
-	reply := make([]byte, 32)
+	if _, err := stream.Write(message); err != nil {
+		return err
+	}
+	reply := make([]byte, quicauth.ServerMessageSize)
 	if _, err := io.ReadFull(stream, reply); err != nil {
 		return err
 	}
-	if !hmac.Equal(reply, quicauth.Proof(password, quicauth.ServerLabel, exporter)) {
+	if !hmac.Equal(reply, expected) {
 		return fmt.Errorf("server proof mismatch")
 	}
 	// 服务端读完就会 STOP_SENDING，此时 Close 可能报已取消，认证本身已经成功。

@@ -4,12 +4,12 @@ import (
 	"fmt"
 	"runtime"
 	"runtime/debug"
+
+	"github.com/orgmio/mio/protocol"
 )
-
-const Version = "0.5.0"
-
+// 该程序仅用于输出版本号，提升版本号请更改mio/protocol/version.go的值
 func PrintVersion() {
-	fmt.Println("The MIO proxy protocol V" + Version)
+	fmt.Println("The MIO proxy protocol V" + protocol.Version)
 	fmt.Println()
 	settings := make(map[string]string)
 	if info, ok := debug.ReadBuildInfo(); ok {

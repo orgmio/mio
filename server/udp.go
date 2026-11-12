@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"crypto/ecdh"
 	"log/slog"
 	"net"
 	"net/netip"
@@ -37,24 +38,22 @@ type flow struct {
 
 // demux 按客户端地址把 UDP 流分流：带有效标记的交给 QUIC 服务，其余原样转发给真站。
 type demux struct {
-	sock     *net.UDPConn
-	password string
-	dest     *net.UDPAddr
-	replay   *quicauth.ReplayCache
-	virtual  *virtualConn
+	sock    *net.UDPConn
+	dest    *net.UDPAddr
+	replay  *quicauth.ReplayCache
+	virtual *virtualConn
 
 	mu    sync.Mutex
 	flows map[netip.AddrPort]*flow
 }
 
-func newDemux(sock *net.UDPConn, password string, dest *net.UDPAddr) *demux {
+func newDemux(sock *net.UDPConn, server *ecdh.PublicKey, dest *net.UDPAddr) *demux {
 	return &demux{
-		sock:     sock,
-		password: password,
-		dest:     dest,
-		replay:   quicauth.NewReplayCache(),
-		virtual:  newVirtualConn(sock),
-		flows:    make(map[netip.AddrPort]*flow),
+		sock:    sock,
+		dest:    dest,
+		replay:  quicauth.NewReplayCache(server),
+		virtual: newVirtualConn(sock),
+		flows:   make(map[netip.AddrPort]*flow),
 	}
 }
 
@@ -105,7 +104,7 @@ func (d *demux) handle(addr netip.AddrPort, pkt []byte) {
 
 	random, status := initialClientHelloRandom(pkt)
 	switch {
-	case status == initialRandom && d.replay.Check(d.password, random):
+	case status == initialRandom && d.replay.Check(random):
 		f.kind = flowMio
 		queued := append(f.pending, pkt)
 		f.pending = nil

@@ -12,6 +12,16 @@ mio使用 TOML 作为配置文件格式。
 [inbounds]
 ```
 
+## 密钥
+
+mio 不使用密码，而是使用一对密钥。在服务端运行：
+
+```bash
+mio keygen
+```
+
+输出的`PrivateKey`填进服务端的`[inbounds].private_key`，`PublicKey`填进客户端的`[outbounds].public_key`。
+
 ## 日志
 
 日志配置用于控制mio的日志输出。
@@ -41,7 +51,7 @@ server = "1.1.1.1"
 server_port = 443
 dest = "one.one.one.one"
 dest_port = 443
-password = "your_password"
+public_key = "mio keygen 输出的 PublicKey"
 ```
 
 - outbounds字段
@@ -60,7 +70,7 @@ password = "your_password"
 
 `dest_port`：伪装目标端口。
 
-`password`：连接密码。
+`public_key`：服务端公钥，即服务端运行`mio keygen`输出的`PublicKey`。
 
 ## 服务端配置
 
@@ -72,7 +82,7 @@ listen = "0.0.0.0"
 listen_port = 443
 dest = "one.one.one.one"
 dest_port = 443
-password = "your_password"
+private_key = "mio keygen 输出的 PrivateKey"
 ```
 
 - inbounds字段
@@ -87,6 +97,6 @@ password = "your_password"
 
 `dest_port`：伪装目标端口。
 
-`password`：连接密码。
+`private_key`：服务端私钥，即`mio keygen`输出的`PrivateKey`，不要泄露给任何人。
 
-> 配置文件中出现未知字段时mio会直接报错，旧版的`[socks5]`、`[peer]`、`[listen]`、`port`、`path`需要改成上面的新名字。
+> 配置文件中出现未知字段时mio会直接报错，旧版的`[socks5]`、`[peer]`、`[listen]`、`port`、`path`、`password`需要改成上面的新名字。

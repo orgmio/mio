@@ -31,12 +31,16 @@ type SOCKS5Node struct {
 	server *socks5.Server
 }
 
-func NewSOCKS5(cfg config.Outbound) *SOCKS5Node {
+func NewSOCKS5(cfg config.Outbound) (*SOCKS5Node, error) {
+	publicKey, err := protocol.ParsePublicKey(cfg.PublicKey)
+	if err != nil {
+		return nil, err
+	}
 	node := &SOCKS5Node{config: cfg, dialer: NewDialer(protocol.Peer{
 		Server:     cfg.Server,
 		ServerPort: cfg.ServerPort,
 		Dest:       cfg.Dest,
-		Password:   cfg.Password,
+		PublicKey:  publicKey,
 	})}
 	node.server = socks5.NewServer(
 		socks5.WithLogger(slogLogger{}),
@@ -44,7 +48,7 @@ func NewSOCKS5(cfg config.Outbound) *SOCKS5Node {
 		socks5.WithRule(&socks5.PermitCommand{EnableConnect: true}),
 		socks5.WithDialAndRequest(node.dial),
 	)
-	return node
+	return node, nil
 }
 
 func (node *SOCKS5Node) dial(ctx context.Context, _, _ string, request *socks5.Request) (net.Conn, error) {

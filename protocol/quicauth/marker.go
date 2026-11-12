@@ -1,7 +1,9 @@
-// Package quicauth 实现 mio QUIC 路径的认证：ClientHello.random 里的标记与绑定 TLS 导出密钥的证明。
+// Package quicauth 实现 mio QUIC 路径的认证：ClientHello.random 里的标记，以及握手后基于服务端静态密钥的双向认证。
 package quicauth
 
 import (
+	"crypto/ecdh"
+	"crypto/hkdf"
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
@@ -9,52 +11,59 @@ import (
 	"io"
 	"sync"
 	"time"
+
+	"github.com/orgmio/mio/protocol"
 )
 
 const (
 	markerNonceSize = 16
 	markerTagSize   = 16
 	markerRetention = 5 * time.Minute // 标记最多约 3 分钟有效，留出余量
-
-	ExporterLabel = "mio quic auth"
-	ClientLabel   = "mio quic client"
-	ServerLabel   = "mio quic server"
-	Timeout       = 5 * time.Second
 )
 
-func markerTag(password string, nonce []byte, minute uint64) []byte {
+// markerKey 由服务端公钥派生：不知道公钥就造不出、也验证不了标记，而公钥是 256 位随机值，无法离线猜测。
+func markerKey(server *ecdh.PublicKey) []byte {
+	key, err := hkdf.Key(sha256.New, server.Bytes(), nil, "mio quic marker "+protocol.Version, 32)
+	if err != nil {
+		panic(err) // 只会因长度参数非法而失败，这里是常量
+	}
+	return key
+}
+
+func markerTag(key, nonce []byte, minute uint64) []byte {
 	var m [8]byte
 	binary.BigEndian.PutUint64(m[:], minute)
-	mac := hmac.New(sha256.New, []byte(password))
-	mac.Write([]byte("mio quic marker"))
+	mac := hmac.New(sha256.New, key)
 	mac.Write(nonce)
 	mac.Write(m[:])
 	return mac.Sum(nil)[:markerTagSize]
 }
 
 // NewMarker 生成放进 ClientHello.random 的 32 字节标记：随机数加带分钟时间戳的 HMAC。
-func NewMarker(password string) ([32]byte, error) {
+func NewMarker(server *ecdh.PublicKey) ([32]byte, error) {
 	var marker [32]byte
 	if _, err := rand.Read(marker[:markerNonceSize]); err != nil {
 		return marker, err
 	}
 	minute := uint64(time.Now().Unix() / 60)
-	copy(marker[markerNonceSize:], markerTag(password, marker[:markerNonceSize], minute))
+	copy(marker[markerNonceSize:], markerTag(markerKey(server), marker[:markerNonceSize], minute))
 	return marker, nil
 }
 
-// ReplayCache 记住近期用过的标记随机数，防止被录下的 Initial 包重放。
+// ReplayCache 校验标记，并记住近期用过的标记随机数，防止被录下的 Initial 包重放。
 type ReplayCache struct {
+	key  []byte
 	mu   sync.Mutex
 	seen map[[markerNonceSize]byte]time.Time
 }
 
-func NewReplayCache() *ReplayCache {
-	return &ReplayCache{seen: make(map[[markerNonceSize]byte]time.Time)}
+// NewReplayCache 为公钥为 server 的服务端创建标记校验器。
+func NewReplayCache(server *ecdh.PublicKey) *ReplayCache {
+	return &ReplayCache{key: markerKey(server), seen: make(map[[markerNonceSize]byte]time.Time)}
 }
 
 // Check 在标记有效、处于时间窗口内且未被用过时返回 true，并记下它。
-func (c *ReplayCache) Check(password string, random []byte) bool {
+func (c *ReplayCache) Check(random []byte) bool {
 	if len(random) != markerNonceSize+markerTagSize {
 		return false
 	}
@@ -63,7 +72,7 @@ func (c *ReplayCache) Check(password string, random []byte) bool {
 	minute := uint64(now.Unix() / 60)
 	valid := false
 	for _, m := range []uint64{minute, minute - 1, minute + 1} {
-		if hmac.Equal(markerTag(password, nonce, m), tag) {
+		if hmac.Equal(markerTag(c.key, nonce, m), tag) {
 			valid = true
 			break
 		}
@@ -105,12 +114,4 @@ func (r *markerRand) Read(p []byte) (int, error) {
 		return copy(p, r.marker[:]), nil
 	}
 	return rand.Read(p)
-}
-
-// Proof 用密码和 TLS 导出密钥算出认证证明，绑定到这条 QUIC 连接，防止中间人转发。
-func Proof(password, label string, exporter []byte) []byte {
-	mac := hmac.New(sha256.New, []byte(password))
-	mac.Write([]byte(label))
-	mac.Write(exporter)
-	return mac.Sum(nil)
 }

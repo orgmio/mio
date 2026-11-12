@@ -2,12 +2,14 @@ package server
 
 import (
 	"context"
+	"crypto/ecdh"
 	"log/slog"
 	"net"
 	"strconv"
 	"time"
 
 	"github.com/orgmio/mio/config"
+	"github.com/orgmio/mio/protocol"
 )
 
 const (
@@ -18,10 +20,15 @@ const (
 // Server 把所有连接当作普通访问转发给真站，只有握手后发来正确认证记录的客户端才会被接管并代理。
 type Server struct {
 	cfg config.Inbound
+	key *ecdh.PrivateKey
 }
 
-func New(cfg config.Inbound) *Server {
-	return &Server{cfg: cfg}
+func New(cfg config.Inbound) (*Server, error) {
+	key, err := protocol.ParsePrivateKey(cfg.PrivateKey)
+	if err != nil {
+		return nil, err
+	}
+	return &Server{cfg: cfg, key: key}, nil
 }
 
 func (s *Server) Run(ctx context.Context) error {

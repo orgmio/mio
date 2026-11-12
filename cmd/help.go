@@ -10,6 +10,7 @@ func Help() {
 	fmt.Println()
 	fmt.Println("Available Commands:")
 	fmt.Println("  run       Run SOCKS5 service")
+	fmt.Println("  keygen    Generate a server key pair")
 	fmt.Println("  version   Print current version of MIO")
 	fmt.Println()
 	fmt.Println("Flags:")

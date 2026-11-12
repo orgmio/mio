@@ -29,6 +29,11 @@ func Execute() {
 			logger.Error("Failed to run : ", "err", err)
 			os.Exit(1)
 		}
+	case "keygen":
+		if err := Keygen(); err != nil {
+			logger.Error("Failed to generate key pair", "err", err)
+			os.Exit(1)
+		}
 	case "version":
 		PrintVersion()
 	case "help":

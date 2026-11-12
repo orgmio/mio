@@ -15,15 +15,16 @@ const (
 
 // DeriveKeys 派生两个方向各自独立的 AES-256-GCM 密钥：
 //
-//	ikm  = secret ‖ password
+//	ikm  = secret ‖ shared
 //	salt = clientRandom ‖ serverRandom
 //	key  = HKDF-SHA256(ikm, salt, "mio c2s" 或 "mio s2c", 32)
 //
-// secret 为 nil 时只用密码，这组密钥只用于服务端发出的 ready 帧。
+// shared 是客户端 TLS key_share 与服务端静态密钥的 X25519 共享密钥。
+// secret 为 nil 时只用 shared，这组密钥只用于服务端发出的 ready 帧。
 // isClient 决定返回值里哪个方向是 send、哪个是 recv。
-func DeriveKeys(password string, secret, clientRandom, serverRandom []byte, isClient bool) (send, recv cipher.AEAD, err error) {
+func DeriveKeys(shared, secret, clientRandom, serverRandom []byte, isClient bool) (send, recv cipher.AEAD, err error) {
 	salt := append(append([]byte{}, clientRandom...), serverRandom...)
-	ikm := append(append([]byte{}, secret...), password...)
+	ikm := append(append([]byte{}, secret...), shared...)
 	c2s, err := newGCM(ikm, salt, labelClientToServer)
 	if err != nil {
 		return nil, nil, err

@@ -53,9 +53,17 @@ func Run(args []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	if cfg.IsServer() {
-		return server.New(cfg.Inbounds).Run(ctx)
+		srv, err := server.New(cfg.Inbounds)
+		if err != nil {
+			return err
+		}
+		return srv.Run(ctx)
 	}
-	return client.NewSOCKS5(cfg.Outbounds).Run(ctx)
+	node, err := client.NewSOCKS5(cfg.Outbounds)
+	if err != nil {
+		return err
+	}
+	return node.Run(ctx)
 }
 
 func setupLog(cfg config.Log) (func(), error) {
