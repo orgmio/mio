@@ -15,11 +15,6 @@
 - 速度：支持自动升降级HTTP/3，大幅度提升高丢包环境下的速度。
   在HTTP/3不可用时自动退回HTTP/2或HTTP/1.1，以保证在几乎任何恶劣环境下均可顺利使用。
 
-TLS-in-TLS特征问题：TCP数据阶段始终使用mio加密，前几个数据record会添加随机填充。
-透明代理无法验证内层TLS 1.3的Finished，因此不会仅凭record外观切换到直传。
-这只能降低部分可观察特征，不能保证消除TLS-in-TLS识别；额外加密也会带来开销。
-TCP协议版本已更新，客户端和服务端需要同时升级。
-
 不道德的问题：本项目因为会借用伪装网站的TLS证书，所以我感觉不怎么道德；
 如果你不在乎，随便用；如果你在乎，请更换其他温和的协议。
 
@@ -40,23 +35,23 @@ DNS部分，因为该仓库只是一个代理协议的概念验证，
 所以解析服务端域名直接使用客户端本地DNS；
 解析通过代理的域名和伪装域名均通过服务端DNS进行解析。
 
+## 📦 作为库使用
+
+mio 的加密和帧格式可以直接引用：
+
+```go
+import "github.com/orgmio/mio/protocol"
+```
+
+线上格式与接口说明见 [协议规范](docs/protocol.md)。
+
 ## ⚖️ 条款
 
 此项目基于[Mo Public License](https://867678.xyz/docs/mopl)授权。
 
 引用的其他项目使用他们自身的许可条款。
 
-内置的QUIC-BBR来自Hysteria2，下面是他的许可条款：
-
-```text
-Copyright 2023 Toby
-
-Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the “Software”), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
-```
+内置的QUIC-BBR来自Hysteria2，[许可条款](https://github.com/HyNetworks/hysteria/blob/master/core/LICENSE.md)
 
 使用时需遵循您所在地区的法律和上述许可条款，
 

@@ -17,15 +17,15 @@ const (
 
 // Server 把所有连接当作普通访问转发给真站，只有握手后发来正确认证记录的客户端才会被接管并代理。
 type Server struct {
-	cfg config.Listen
+	cfg config.Inbound
 }
 
-func New(cfg config.Listen) *Server {
+func New(cfg config.Inbound) *Server {
 	return &Server{cfg: cfg}
 }
 
 func (s *Server) Run(ctx context.Context) error {
-	address := net.JoinHostPort(s.cfg.Listen, strconv.Itoa(s.cfg.Port))
+	address := net.JoinHostPort(s.cfg.Listen, strconv.Itoa(s.cfg.ListenPort))
 	listener, err := net.Listen("tcp", address)
 	if err != nil {
 		return err

@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/orgmio/mio/protocol"
+	"github.com/orgmio/mio/protocol/quicauth"
 )
 
 const (
@@ -40,7 +40,7 @@ type demux struct {
 	sock     *net.UDPConn
 	password string
 	dest     *net.UDPAddr
-	replay   *protocol.ReplayCache
+	replay   *quicauth.ReplayCache
 	virtual  *virtualConn
 
 	mu    sync.Mutex
@@ -52,7 +52,7 @@ func newDemux(sock *net.UDPConn, password string, dest *net.UDPAddr) *demux {
 		sock:     sock,
 		password: password,
 		dest:     dest,
-		replay:   protocol.NewReplayCache(),
+		replay:   quicauth.NewReplayCache(),
 		virtual:  newVirtualConn(sock),
 		flows:    make(map[netip.AddrPort]*flow),
 	}

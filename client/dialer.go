@@ -1,4 +1,4 @@
-package protocol
+package client
 
 import (
 	"context"
@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/orgmio/mio/config"
+	"github.com/orgmio/mio/protocol"
 )
 
 const (
@@ -37,7 +37,7 @@ type dialResult struct {
 
 // Dialer 会并行探测 TCP 和 QUIC，随后在 10 到 30 分钟后重新比较两者。
 type Dialer struct {
-	peer config.Peer
+	peer protocol.Peer
 
 	mu          sync.Mutex
 	session     *quicSession
@@ -48,7 +48,7 @@ type Dialer struct {
 	quicLatency time.Duration
 }
 
-func NewDialer(peer config.Peer) *Dialer {
+func NewDialer(peer protocol.Peer) *Dialer {
 	return &Dialer{peer: peer}
 }
 
@@ -113,7 +113,7 @@ func (d *Dialer) Dial(ctx context.Context, target string) (net.Conn, error) {
 func (d *Dialer) dialSelected(ctx context.Context, target string, selected transportChoice, session *quicSession) (net.Conn, error) {
 	if selected == transportQUIC && session != nil {
 		conn, err := session.dialStream(ctx, target)
-		if err == nil || errors.Is(err, ErrConnectFailed) || ctx.Err() != nil {
+		if err == nil || errors.Is(err, protocol.ErrConnectFailed) || ctx.Err() != nil {
 			return conn, err
 		}
 		if session.conn.Context().Err() != nil {
@@ -123,8 +123,8 @@ func (d *Dialer) dialSelected(ctx context.Context, target string, selected trans
 		slog.Debug("h3 stream failed, falling back to tcp", "err", err)
 	}
 
-	conn, tcpErr := DialTCP(ctx, d.peer, target)
-	if tcpErr == nil || errors.Is(tcpErr, ErrConnectFailed) || ctx.Err() != nil {
+	conn, tcpErr := protocol.DialTCP(ctx, d.peer, target)
+	if tcpErr == nil || errors.Is(tcpErr, protocol.ErrConnectFailed) || ctx.Err() != nil {
 		return conn, tcpErr
 	}
 	owned := false
@@ -200,7 +200,7 @@ func (d *Dialer) probe(ctx context.Context, target string) (net.Conn, error) {
 
 func (d *Dialer) dialTCPResult(ctx context.Context, target string) dialResult {
 	started := time.Now()
-	conn, err := DialTCP(ctx, d.peer, target)
+	conn, err := protocol.DialTCP(ctx, d.peer, target)
 	return dialResult{transport: transportTCP, conn: conn, elapsed: time.Since(started), err: err}
 }
 

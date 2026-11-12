@@ -12,12 +12,14 @@ import (
 
 	"github.com/apernet/quic-go"
 
+	"github.com/orgmio/mio/internal/congestion"
 	"github.com/orgmio/mio/protocol"
+	"github.com/orgmio/mio/protocol/quicauth"
 )
 
 // runQUIC 在与 TCP 相同的端口上监听 UDP：带有效标记的流量由 quic-go 处理，其余转发给真站。
 func (s *Server) runQUIC(ctx context.Context) error {
-	address := net.JoinHostPort(s.cfg.Listen, strconv.Itoa(s.cfg.Port))
+	address := net.JoinHostPort(s.cfg.Listen, strconv.Itoa(s.cfg.ListenPort))
 	udpAddr, err := net.ResolveUDPAddr("udp", address)
 	if err != nil {
 		return err
@@ -78,7 +80,7 @@ func (s *Server) runQUIC(ctx context.Context) error {
 
 func (s *Server) serveQUIC(ctx context.Context, conn *quic.Conn) {
 	defer conn.CloseWithError(0, "")
-	protocol.ConfigureBBR(conn)
+	congestion.UseBBR(conn)
 	if err := s.authQUIC(ctx, conn); err != nil {
 		slog.Debug("quic auth failed", "from", conn.RemoteAddr().String(), "err", err)
 		return
@@ -95,28 +97,28 @@ func (s *Server) serveQUIC(ctx context.Context, conn *quic.Conn) {
 
 // authQUIC 校验客户端在首个 stream 上发来的、绑定 TLS 导出密钥的 HMAC，并回送服务端的证明。
 func (s *Server) authQUIC(ctx context.Context, conn *quic.Conn) error {
-	authCtx, cancel := context.WithTimeout(ctx, protocol.QUICAuthTimeout)
+	authCtx, cancel := context.WithTimeout(ctx, quicauth.Timeout)
 	defer cancel()
 	stream, err := conn.AcceptStream(authCtx)
 	if err != nil {
 		return err
 	}
 	defer stream.CancelRead(0)
-	stream.SetDeadline(time.Now().Add(protocol.QUICAuthTimeout))
+	stream.SetDeadline(time.Now().Add(quicauth.Timeout))
 
 	got := make([]byte, 32)
 	if _, err := io.ReadFull(stream, got); err != nil {
 		return err
 	}
 	state := conn.ConnectionState()
-	exporter, err := state.TLS.ExportKeyingMaterial(protocol.QUICExporterLabel, nil, 32)
+	exporter, err := state.TLS.ExportKeyingMaterial(quicauth.ExporterLabel, nil, 32)
 	if err != nil {
 		return err
 	}
-	if !hmac.Equal(got, protocol.QUICProof(s.cfg.Password, protocol.QUICClientLabel, exporter)) {
+	if !hmac.Equal(got, quicauth.Proof(s.cfg.Password, quicauth.ClientLabel, exporter)) {
 		return io.ErrUnexpectedEOF
 	}
-	if _, err := stream.Write(protocol.QUICProof(s.cfg.Password, protocol.QUICServerLabel, exporter)); err != nil {
+	if _, err := stream.Write(quicauth.Proof(s.cfg.Password, quicauth.ServerLabel, exporter)); err != nil {
 		return err
 	}
 	return stream.Close()

@@ -40,7 +40,7 @@ jobs:
         id: get_version
         shell: bash
         run: |
-          echo "version=$(grep 'const Version' common/version.go | cut -d'"' -f2)" >> $GITHUB_OUTPUT
+          echo "version=$(grep 'const Version' cmd/version.go | cut -d'"' -f2)" >> $GITHUB_OUTPUT
           mv go.mod go.mod.backup
 
       - name: Set up Go
@@ -58,7 +58,7 @@ jobs:
         if: github.ref == 'refs/heads/main'
         uses: softprops/action-gh-release@master
         with:
-          tag_name: V${{ steps.get_version.outputs.version }}
+          tag_name: v${{ steps.get_version.outputs.version }}
           files: mio-${{ matrix.dickname }}
           body: |
             # 📝 Release Notes

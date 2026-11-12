@@ -26,13 +26,18 @@ func (noResolver) Resolve(ctx context.Context, _ string) (context.Context, net.I
 }
 
 type SOCKS5Node struct {
-	config config.SOCKS5
-	dialer *protocol.Dialer
+	config config.Outbound
+	dialer *Dialer
 	server *socks5.Server
 }
 
-func NewSOCKS5(cfg config.SOCKS5, peer config.Peer) *SOCKS5Node {
-	node := &SOCKS5Node{config: cfg, dialer: protocol.NewDialer(peer)}
+func NewSOCKS5(cfg config.Outbound) *SOCKS5Node {
+	node := &SOCKS5Node{config: cfg, dialer: NewDialer(protocol.Peer{
+		Server:     cfg.Server,
+		ServerPort: cfg.ServerPort,
+		Dest:       cfg.Dest,
+		Password:   cfg.Password,
+	})}
 	node.server = socks5.NewServer(
 		socks5.WithLogger(slogLogger{}),
 		socks5.WithResolver(noResolver{}),
@@ -75,7 +80,7 @@ func (l loggingListener) Accept() (net.Conn, error) {
 }
 
 func (node *SOCKS5Node) Run(ctx context.Context) error {
-	address := net.JoinHostPort(node.config.Listen, strconv.Itoa(node.config.Port))
+	address := net.JoinHostPort(node.config.SocksListen, strconv.Itoa(node.config.SocksListenPort))
 	listener, err := net.Listen("tcp", address)
 	if err != nil {
 		return fmt.Errorf("listen on %s: %w", address, err)

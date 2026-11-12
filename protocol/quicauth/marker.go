@@ -1,10 +1,12 @@
-package protocol
+// Package quicauth 实现 mio QUIC 路径的认证：ClientHello.random 里的标记与绑定 TLS 导出密钥的证明。
+package quicauth
 
 import (
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/binary"
+	"io"
 	"sync"
 	"time"
 )
@@ -12,12 +14,12 @@ import (
 const (
 	markerNonceSize = 16
 	markerTagSize   = 16
-	markerRetention = 3 * time.Minute
+	markerRetention = 5 * time.Minute // 标记最多约 3 分钟有效，留出余量
 
-	QUICExporterLabel = "mio quic auth"
-	QUICClientLabel   = "mio quic client"
-	QUICServerLabel   = "mio quic server"
-	QUICAuthTimeout   = 5 * time.Second
+	ExporterLabel = "mio quic auth"
+	ClientLabel   = "mio quic client"
+	ServerLabel   = "mio quic server"
+	Timeout       = 5 * time.Second
 )
 
 func markerTag(password string, nonce []byte, minute uint64) []byte {
@@ -30,8 +32,8 @@ func markerTag(password string, nonce []byte, minute uint64) []byte {
 	return mac.Sum(nil)[:markerTagSize]
 }
 
-// NewQUICMarker 生成放进 ClientHello.random 的 32 字节标记：随机数加带分钟时间戳的 HMAC。
-func NewQUICMarker(password string) ([32]byte, error) {
+// NewMarker 生成放进 ClientHello.random 的 32 字节标记：随机数加带分钟时间戳的 HMAC。
+func NewMarker(password string) ([32]byte, error) {
 	var marker [32]byte
 	if _, err := rand.Read(marker[:markerNonceSize]); err != nil {
 		return marker, err
@@ -86,7 +88,9 @@ func (c *ReplayCache) Check(password string, random []byte) bool {
 	return true
 }
 
-// markerRand 让 TLS 库生成 ClientHello 时，第一次读 32 字节（即 random）得到标记。
+// NewRand 返回给 tls.Config.Rand 用的随机源：TLS 库第一次读 32 字节（即 ClientHello.random）时得到 marker。
+func NewRand(marker [32]byte) io.Reader { return &markerRand{marker: marker} }
+
 type markerRand struct {
 	mu     sync.Mutex
 	marker [32]byte
@@ -103,8 +107,8 @@ func (r *markerRand) Read(p []byte) (int, error) {
 	return rand.Read(p)
 }
 
-// QUICProof 用密码和 TLS 导出密钥算出认证证明，绑定到这条 QUIC 连接，防止中间人转发。
-func QUICProof(password, label string, exporter []byte) []byte {
+// Proof 用密码和 TLS 导出密钥算出认证证明，绑定到这条 QUIC 连接，防止中间人转发。
+func Proof(password, label string, exporter []byte) []byte {
 	mac := hmac.New(sha256.New, []byte(password))
 	mac.Write([]byte(label))
 	mac.Write(exporter)

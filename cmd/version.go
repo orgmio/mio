@@ -1,4 +1,4 @@
-package command
+package cmd
 
 import (
 	"fmt"
@@ -6,14 +6,16 @@ import (
 	"runtime/debug"
 )
 
-const Version = "0.4.9"
+const Version = "0.5.0"
 
 func PrintVersion() {
-	fmt.Println("The MIO proxy protocol V" + Version + "\n")
-	info, _ := debug.ReadBuildInfo()
+	fmt.Println("The MIO proxy protocol V" + Version)
+	fmt.Println()
 	settings := make(map[string]string)
-	for _, s := range info.Settings {
-		settings[s.Key] = s.Value
+	if info, ok := debug.ReadBuildInfo(); ok {
+		for _, s := range info.Settings {
+			settings[s.Key] = s.Value
+		}
 	}
 	fmt.Println("Environment=" + runtime.Version() + " " + runtime.GOARCH)
 	fmt.Println("Commit Hash=" + settings["vcs.revision"])

@@ -7,6 +7,7 @@ import (
 	"net"
 	"sync/atomic"
 
+	"github.com/orgmio/mio/internal/tlsrecord"
 	"github.com/orgmio/mio/protocol"
 )
 
@@ -21,9 +22,9 @@ func (s *Server) relay(client, dest net.Conn) (net.Conn, bool) {
 	camouflageStopped := make(chan struct{})
 	go func() {
 		defer close(camouflageStopped)
-		protocol.CopyRecords(client, bufio.NewReader(dest), func(header, body []byte) bool {
+		tlsrecord.CopyRecords(client, bufio.NewReader(dest), func(header, body []byte) bool {
 			// 遇到 HelloRetryRequest 时会有两条 ServerHello，以最后一条为准。
-			if header[0] == protocol.RecordHandshake && len(body) >= 38 && body[0] == protocol.HandshakeServerHello {
+			if header[0] == tlsrecord.TypeHandshake && len(body) >= 38 && body[0] == tlsrecord.HandshakeServerHello {
 				random := bytes.Clone(body[6:38])
 				serverRandom.Store(&random)
 			}
@@ -34,20 +35,20 @@ func (s *Server) relay(client, dest net.Conn) (net.Conn, bool) {
 		}
 	}()
 
-	err := protocol.CopyRecords(dest, clientReader, func(header, body []byte) bool {
-		if header[0] == protocol.RecordHandshake && len(body) >= 38 && body[0] == protocol.HandshakeClientHello {
+	err := tlsrecord.CopyRecords(dest, clientReader, func(header, body []byte) bool {
+		if header[0] == tlsrecord.TypeHandshake && len(body) >= 38 && body[0] == tlsrecord.HandshakeClientHello {
 			clientRandom = bytes.Clone(body[6:38])
 		}
 		random := serverRandom.Load()
-		if random == nil || header[0] != protocol.RecordAppData {
+		if random == nil || header[0] != tlsrecord.TypeAppData {
 			return false
 		}
 		var ok bool
-		share, ok = protocol.VerifyAuth(s.cfg.Password, *random, body)
+		share, ok = protocol.VerifyAuth(s.cfg.Password, *random, header, body)
 		return ok
 	})
 
-	authenticated := errors.Is(err, protocol.ErrAuthenticated)
+	authenticated := errors.Is(err, tlsrecord.ErrAuthenticated)
 	if authenticated {
 		connectionClaimed.Store(true)
 	}

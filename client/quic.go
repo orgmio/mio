@@ -1,4 +1,4 @@
-package protocol
+package client
 
 import (
 	"context"
@@ -12,11 +12,15 @@ import (
 
 	"github.com/apernet/quic-go"
 
-	"github.com/orgmio/mio/config"
-	"github.com/orgmio/mio/internal/congestion/bbr"
+	"github.com/orgmio/mio/internal/congestion"
+	"github.com/orgmio/mio/protocol"
+	"github.com/orgmio/mio/protocol/quicauth"
 )
 
-const quicDialTimeout = 5 * time.Second
+const (
+	quicDialTimeout = 5 * time.Second
+	replyTimeout    = 10 * time.Second
+)
 
 // quicSession 是到服务端的一条长连接，每个代理连接占用其上的一个 stream。
 type quicSession struct {
@@ -53,13 +57,8 @@ func quicClientConfig(ipv4 bool) *quic.Config {
 	}
 }
 
-// ConfigureBBR 在 QUIC 握手完成后安装 BBR 拥塞控制器。
-func ConfigureBBR(conn *quic.Conn) {
-	conn.SetCongestionControl(bbr.NewBbrSender(bbr.DefaultClock{}, conn.InitialPacketSize()))
-}
-
-func dialQUIC(ctx context.Context, peer config.Peer) (*quicSession, error) {
-	addr, err := net.ResolveUDPAddr("udp", net.JoinHostPort(peer.Server, strconv.Itoa(peer.Port)))
+func dialQUIC(ctx context.Context, peer protocol.Peer) (*quicSession, error) {
+	addr, err := net.ResolveUDPAddr("udp", net.JoinHostPort(peer.Server, strconv.Itoa(peer.ServerPort)))
 	if err != nil {
 		return nil, err
 	}
@@ -71,7 +70,7 @@ func dialQUIC(ctx context.Context, peer config.Peer) (*quicSession, error) {
 	if err != nil {
 		return nil, err
 	}
-	marker, err := NewQUICMarker(peer.Password)
+	marker, err := quicauth.NewMarker(peer.Password)
 	if err != nil {
 		udp.Close()
 		return nil, err
@@ -84,7 +83,7 @@ func dialQUIC(ctx context.Context, peer config.Peer) (*quicSession, error) {
 		MinVersion: tls.VersionTLS13,
 		// 服务端证书是自签的，对端身份由 authenticate 里绑定通道的 HMAC 校验。
 		InsecureSkipVerify: true,
-		Rand:               &markerRand{marker: marker},
+		Rand:               quicauth.NewRand(marker),
 	}
 	dialCtx, cancel := context.WithTimeout(ctx, quicDialTimeout)
 	defer cancel()
@@ -95,7 +94,7 @@ func dialQUIC(ctx context.Context, peer config.Peer) (*quicSession, error) {
 		return nil, fmt.Errorf("quic handshake: %w", err)
 	}
 
-	ConfigureBBR(conn)
+	congestion.UseBBR(conn)
 	session := &quicSession{conn: conn, transport: transport, udp: udp}
 	if err := session.authenticate(ctx, peer.Password); err != nil {
 		session.Close()
@@ -107,11 +106,11 @@ func dialQUIC(ctx context.Context, peer config.Peer) (*quicSession, error) {
 // authenticate 在首个 stream 上交换绑定 TLS 导出密钥的 HMAC，双方都证明持有密码。
 func (s *quicSession) authenticate(parent context.Context, password string) error {
 	state := s.conn.ConnectionState()
-	exporter, err := state.TLS.ExportKeyingMaterial(QUICExporterLabel, nil, 32)
+	exporter, err := state.TLS.ExportKeyingMaterial(quicauth.ExporterLabel, nil, 32)
 	if err != nil {
 		return err
 	}
-	ctx, cancel := context.WithTimeout(parent, QUICAuthTimeout)
+	ctx, cancel := context.WithTimeout(parent, quicauth.Timeout)
 	defer cancel()
 	stream, err := s.conn.OpenStreamSync(ctx)
 	if err != nil {
@@ -126,14 +125,14 @@ func (s *quicSession) authenticate(parent context.Context, password string) erro
 	})
 	defer stop()
 
-	if _, err := stream.Write(QUICProof(password, QUICClientLabel, exporter)); err != nil {
+	if _, err := stream.Write(quicauth.Proof(password, quicauth.ClientLabel, exporter)); err != nil {
 		return err
 	}
 	reply := make([]byte, 32)
 	if _, err := io.ReadFull(stream, reply); err != nil {
 		return err
 	}
-	if !hmac.Equal(reply, QUICProof(password, QUICServerLabel, exporter)) {
+	if !hmac.Equal(reply, quicauth.Proof(password, quicauth.ServerLabel, exporter)) {
 		return fmt.Errorf("server proof mismatch")
 	}
 	// 服务端读完就会 STOP_SENDING，此时 Close 可能报已取消，认证本身已经成功。
@@ -146,13 +145,13 @@ func (s *quicSession) dialStream(ctx context.Context, target string) (net.Conn, 
 	if err != nil {
 		return nil, err
 	}
-	conn := NewStreamConn(stream, func() { stream.CancelRead(0) }, s.conn.LocalAddr(), s.conn.RemoteAddr())
-	if err := WriteRequest(conn, target); err != nil {
+	conn := protocol.NewStreamConn(stream, func() { stream.CancelRead(0) }, s.conn.LocalAddr(), s.conn.RemoteAddr())
+	if err := protocol.WriteRequest(conn, target); err != nil {
 		conn.Close()
 		return nil, err
 	}
 	conn.SetReadDeadline(time.Now().Add(replyTimeout))
-	if err := ReadReply(conn); err != nil {
+	if err := protocol.ReadReply(conn); err != nil {
 		conn.Close()
 		return nil, err
 	}

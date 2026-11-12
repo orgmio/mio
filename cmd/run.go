@@ -1,4 +1,4 @@
-package command
+package cmd
 
 import (
 	"context"
@@ -53,9 +53,9 @@ func Run(args []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	if cfg.IsServer() {
-		return server.New(cfg.Listen).Run(ctx)
+		return server.New(cfg.Inbounds).Run(ctx)
 	}
-	return client.NewSOCKS5(cfg.Socks5, cfg.Peer).Run(ctx)
+	return client.NewSOCKS5(cfg.Outbounds).Run(ctx)
 }
 
 func setupLog(cfg config.Log) (func(), error) {
@@ -71,15 +71,24 @@ func setupLog(cfg config.Log) (func(), error) {
 
 	var output io.Writer = os.Stderr
 	closeLog := func() {}
-	if cfg.Path != "" {
-		file, err := os.OpenFile(cfg.Path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	if cfg.Output != "" {
+		file, err := os.OpenFile(cfg.Output, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 		if err != nil {
-			return nil, fmt.Errorf("open log file %q: %w", cfg.Path, err)
+			return nil, fmt.Errorf("open log file %q: %w", cfg.Output, err)
 		}
 		output = file
 		closeLog = func() { file.Close() }
 	}
 
-	slog.SetDefault(slog.New(slog.NewTextHandler(output, &slog.HandlerOptions{Level: level})))
+	options := &slog.HandlerOptions{Level: level}
+	if !cfg.Timestamp {
+		options.ReplaceAttr = func(groups []string, a slog.Attr) slog.Attr {
+			if len(groups) == 0 && a.Key == slog.TimeKey {
+				return slog.Attr{}
+			}
+			return a
+		}
+	}
+	slog.SetDefault(slog.New(slog.NewTextHandler(output, options)))
 	return closeLog, nil
 }
