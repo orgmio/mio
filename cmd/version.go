@@ -48,9 +48,9 @@ func PrintVersion() {
 	}
 	fmt.Println("Environment: " + runtime.Version() + " " + runtime.GOOS + "/" + runtime.GOARCH)
 	fmt.Println("Revision: " + settings["vcs.revision"])
-	cgo-status := "disabled"
+	cgo := "disabled"
 	if settings["CGO_ENABLED"] == "1" {
 		cgo = "enabled"
 	}
-	fmt.Println("CGO_ENABLED: " + cgo-status)
+	fmt.Println("CGO_ENABLED: " + cgo)
 }
