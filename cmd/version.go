@@ -12,7 +12,7 @@ import (
 
 // Version 是 mio 的程序版本，发布新版本时改这里。
 // 它与协议版本（protocol.Version）无关，只提升它不影响新旧版本互通。
-const Version = "0.5.4"
+const Version = "0.5.5"
 
 var nameOnly bool
 
@@ -47,12 +47,10 @@ func PrintVersion() {
 		}
 	}
 	fmt.Println("Environment: " + runtime.Version() + " " + runtime.GOOS + "/" + runtime.GOARCH)
-	if revision := settings["vcs.revision"]; revision != "" {
-		fmt.Println("Revision: " + revision)
-	}
-	cgo := "disabled"
+	fmt.Println("Revision: " + settings["vcs.revision"])
+	cgo-status := "disabled"
 	if settings["CGO_ENABLED"] == "1" {
 		cgo = "enabled"
 	}
-	fmt.Println("CGO: " + cgo)
+	fmt.Println("CGO_ENABLED: " + cgo-status)
 }
