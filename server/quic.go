@@ -16,26 +16,27 @@ import (
 	"github.com/orgmio/mio/protocol/quicauth"
 )
 
-// runQUIC 在与 TCP 相同的端口上监听 UDP：带有效标记的流量由 quic-go 处理，其余转发给真站。
-func (s *Server) runQUIC(ctx context.Context) error {
+// startQUIC 在与 TCP 相同的端口上监听 UDP：带有效标记的流量由 quic-go 处理，其余转发给真站。
+// 监听成功后返回接受连接的循环，由调用方运行，直到 ctx 结束。
+func (s *Server) startQUIC(ctx context.Context) (func() error, error) {
 	address := net.JoinHostPort(s.cfg.Listen, strconv.Itoa(s.cfg.ListenPort))
 	udpAddr, err := net.ResolveUDPAddr("udp", address)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	sock, err := net.ListenUDP("udp", udpAddr)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	cert, err := selfSignedCert(s.cfg.Dest)
 	if err != nil {
 		sock.Close()
-		return err
+		return nil, err
 	}
 
 	dest, err := net.ResolveUDPAddr("udp", net.JoinHostPort(s.cfg.Dest, strconv.Itoa(s.cfg.DestPort)))
 	if err != nil {
-		slog.Warn("resolve dest udp failed, unmarked quic traffic will be dropped", "err", err)
+		slog.Warn("inbound/mio: resolve dest udp, unmarked quic traffic will be dropped", "err", err)
 		dest = nil
 	}
 	d := newDemux(sock, s.key.PublicKey(), dest)
@@ -56,32 +57,34 @@ func (s *Server) runQUIC(ctx context.Context) error {
 	})
 	if err != nil {
 		sock.Close()
-		return err
+		return nil, err
 	}
-	slog.Info("Listen mio quic", "address", sock.LocalAddr().String())
+	slog.Info("inbound/mio: udp server started at " + sock.LocalAddr().String())
 
 	go func() {
 		<-ctx.Done()
 		listener.Close()
 		transport.Close()
 	}()
-	for {
-		conn, err := listener.Accept(ctx)
-		if err != nil {
-			if ctx.Err() != nil {
-				return nil
+	return func() error {
+		for {
+			conn, err := listener.Accept(ctx)
+			if err != nil {
+				if ctx.Err() != nil {
+					return nil
+				}
+				return err
 			}
-			return err
+			go s.handleQUIC(ctx, conn)
 		}
-		go s.serveQUIC(ctx, conn)
-	}
+	}, nil
 }
 
-func (s *Server) serveQUIC(ctx context.Context, conn *quic.Conn) {
+func (s *Server) handleQUIC(ctx context.Context, conn *quic.Conn) {
 	defer conn.CloseWithError(0, "")
 	congestion.UseBBR(conn)
 	if err := s.authQUIC(ctx, conn); err != nil {
-		slog.Debug("quic auth failed", "from", conn.RemoteAddr().String(), "err", err)
+		slog.Debug("inbound/mio: quic auth from "+conn.RemoteAddr().String(), "err", err)
 		return
 	}
 	for {

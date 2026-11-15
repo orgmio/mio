@@ -70,7 +70,7 @@ func (d *demux) run(ctx context.Context) {
 		n, addr, err := d.sock.ReadFromUDPAddrPort(buf)
 		if err != nil {
 			if ctx.Err() == nil {
-				slog.Warn("udp read failed", "err", err)
+				slog.Warn("inbound/mio: udp read", "err", err)
 			}
 			return
 		}
@@ -109,7 +109,7 @@ func (d *demux) handle(addr netip.AddrPort, pkt []byte) {
 		queued := append(f.pending, pkt)
 		f.pending = nil
 		d.mu.Unlock()
-		slog.Debug("quic flow accepted", "from", addr.String())
+		slog.Debug("inbound/mio: quic flow from " + addr.String() + " accepted")
 		for _, p := range queued {
 			d.virtual.push(p, addr)
 		}
@@ -123,7 +123,7 @@ func (d *demux) handle(addr netip.AddrPort, pkt []byte) {
 		f.relay = d.openRelay(addr)
 		relay := f.relay
 		d.mu.Unlock()
-		slog.Debug("quic flow relayed to dest", "from", addr.String())
+		slog.Debug("inbound/mio: quic flow from " + addr.String() + " relayed to dest")
 		if relay != nil {
 			for _, p := range queued {
 				relay.Write(p)
@@ -139,7 +139,7 @@ func (d *demux) openRelay(client netip.AddrPort) *net.UDPConn {
 	}
 	relay, err := net.DialUDP("udp", nil, d.dest)
 	if err != nil {
-		slog.Warn("dial dest udp failed", "err", err)
+		slog.Warn("inbound/mio: open udp connection to dest", "err", err)
 		return nil
 	}
 	go func() {

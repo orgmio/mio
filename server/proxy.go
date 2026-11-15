@@ -20,14 +20,16 @@ func (s *Server) proxy(ctx context.Context, conn net.Conn) {
 	target, err := protocol.ReadRequest(conn)
 	conn.SetReadDeadline(time.Time{})
 	if err != nil {
-		slog.Warn("read request failed", "from", from, "err", err)
+		slog.Error("inbound/mio: process connection from "+from+": read request", "err", err)
 		return
 	}
 
+	slog.Info("inbound/mio: inbound connection from " + from)
+	slog.Info("inbound/mio: inbound connection to " + target)
 	dialer := net.Dialer{Timeout: dialTimeout}
 	remote, err := dialer.DialContext(ctx, "tcp", target)
 	if err != nil {
-		slog.Warn("dial target failed", "from", from, "target", target, "err", err)
+		slog.Error("outbound/direct: open connection to "+target, "err", err)
 		if p, ok := conn.(interface{ SetNextPadding(int, int) }); ok {
 			p.SetNextPadding(16, 512)
 		}
@@ -42,7 +44,7 @@ func (s *Server) proxy(ctx context.Context, conn net.Conn) {
 	if err := protocol.WriteReply(conn, true); err != nil {
 		return
 	}
-	slog.Info("proxy", "from", from, "target", target)
+	slog.Info("outbound/direct: outbound connection to " + target)
 	pipe(conn, remote)
 }
 

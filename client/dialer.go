@@ -78,7 +78,7 @@ func (d *Dialer) WarmUp(ctx context.Context) {
 				d.mu.Unlock()
 				session.Close()
 			} else if ctx.Err() == nil {
-				slog.Debug("quic warm-up failed", "err", err)
+				slog.Debug("outbound/mio: quic warm-up", "err", err)
 			}
 		}
 		timer := time.NewTimer(5 * time.Second)
@@ -120,7 +120,7 @@ func (d *Dialer) dialSelected(ctx context.Context, target string, selected trans
 			d.drop(session)
 		}
 		d.selectTransport(transportTCP)
-		slog.Debug("h3 stream failed, falling back to tcp", "err", err)
+		slog.Debug("outbound/mio: h3 stream failed, falling back to tcp", "err", err)
 	}
 
 	conn, tcpErr := protocol.DialTCP(ctx, d.peer, target)

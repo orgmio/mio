@@ -2,42 +2,46 @@ package cmd
 
 import (
 	"context"
-	"errors"
-	"flag"
 	"fmt"
-	"io"
 	"log/slog"
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
+
+	"github.com/spf13/cobra"
 
 	"github.com/orgmio/mio/client"
 	"github.com/orgmio/mio/config"
 	"github.com/orgmio/mio/server"
 )
 
-func Run(args []string) error {
-	flags := flag.NewFlagSet("run", flag.ContinueOnError)
-	flags.SetOutput(os.Stderr)
-	var configPath string
-	flags.StringVar(&configPath, "c", "", "configuration file path")
-	flags.StringVar(&configPath, "config", "", "configuration file path")
-	flags.Usage = func() {
-		fmt.Fprintln(flags.Output(), "Usage: mio run -c <config.toml>")
-		flags.PrintDefaults()
-	}
+// service 是服务端或客户端：Start 开始监听，Serve 处理连接直到 ctx 结束。
+type service interface {
+	Start(ctx context.Context) error
+	Serve(ctx context.Context) error
+}
 
-	if err := flags.Parse(args); err != nil {
-		if errors.Is(err, flag.ErrHelp) {
-			return nil
+var commandRun = &cobra.Command{
+	Use:   "run",
+	Short: "Run service",
+	Args:  cobra.NoArgs,
+	Run: func(*cobra.Command, []string) {
+		if err := Run(configPath); err != nil {
+			fatal(err)
 		}
-		return err
-	}
-	if flags.NArg() != 0 {
-		return fmt.Errorf("unexpected argument: %s", flags.Arg(0))
-	}
+	},
+}
+
+func init() {
+	mainCommand.AddCommand(commandRun)
+}
+
+// Run 读取 configPath 指向的配置文件并启动其中配置的客户端和/或服务端，直到收到退出信号。
+// configPath 为空时读取当前目录下的 config.toml。
+func Run(configPath string) error {
 	if configPath == "" {
-		return errors.New("missing configuration file; use -c <path>")
+		configPath = defaultConfigPath
 	}
 
 	cfg, err := config.Load(configPath)
@@ -52,51 +56,43 @@ func Run(args []string) error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	if cfg.IsServer() {
+	// 配置了 [inbounds] 就启动服务端，配置了 [outbounds] 就启动客户端，两个都有则同时运行。
+	var services []service
+	if cfg.HasServer() {
 		srv, err := server.New(cfg.Inbounds)
 		if err != nil {
 			return err
 		}
-		return srv.Run(ctx)
+		services = append(services, srv)
 	}
-	node, err := client.NewSOCKS5(cfg.Outbounds)
-	if err != nil {
-		return err
-	}
-	return node.Run(ctx)
-}
-
-func setupLog(cfg config.Log) (func(), error) {
-	if !cfg.Enable {
-		slog.SetDefault(slog.New(slog.DiscardHandler))
-		return func() {}, nil
-	}
-
-	level, err := cfg.SlogLevel()
-	if err != nil {
-		return nil, err
-	}
-
-	var output io.Writer = os.Stderr
-	closeLog := func() {}
-	if cfg.Output != "" {
-		file, err := os.OpenFile(cfg.Output, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	if cfg.HasClient() {
+		node, err := client.NewSOCKS5(cfg.Outbounds)
 		if err != nil {
-			return nil, fmt.Errorf("open log file %q: %w", cfg.Output, err)
+			return err
 		}
-		output = file
-		closeLog = func() { file.Close() }
+		services = append(services, node)
 	}
 
-	options := &slog.HandlerOptions{Level: level}
-	if !cfg.Timestamp {
-		options.ReplaceAttr = func(groups []string, a slog.Attr) slog.Attr {
-			if len(groups) == 0 && a.Key == slog.TimeKey {
-				return slog.Attr{}
-			}
-			return a
+	// 任何一个退出（出错或收到信号）都会让另一个一起停下，返回最先出现的错误。
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	for _, s := range services {
+		if err := s.Start(ctx); err != nil {
+			return err
 		}
 	}
-	slog.SetDefault(slog.New(slog.NewTextHandler(output, options)))
-	return closeLog, nil
+	slog.Info(fmt.Sprintf("mio started (%.2fs)", time.Since(startTime).Seconds()))
+
+	results := make(chan error, len(services))
+	for _, s := range services {
+		go func() { results <- s.Serve(ctx) }()
+	}
+	var firstErr error
+	for range services {
+		if err := <-results; err != nil && firstErr == nil {
+			firstErr = err
+		}
+		cancel()
+	}
+	return firstErr
 }

@@ -5,11 +5,38 @@ import (
 	"runtime"
 	"runtime/debug"
 
+	"github.com/spf13/cobra"
+
 	"github.com/orgmio/mio/protocol"
 )
-// 该程序仅用于输出版本号，提升版本号请更改mio/protocol/version.go的值
+
+// Version 是 mio 的程序版本，发布新版本时改这里。
+// 它与协议版本（protocol.Version）无关，只提升它不影响新旧版本互通。
+const Version = "0.5.2"
+
+var nameOnly bool
+
+var commandVersion = &cobra.Command{
+	Use:   "version",
+	Short: "Print current version of mio",
+	Args:  cobra.NoArgs,
+	Run: func(*cobra.Command, []string) {
+		if nameOnly {
+			fmt.Println(Version)
+			return
+		}
+		PrintVersion()
+	},
+}
+
+func init() {
+	commandVersion.Flags().BoolVarP(&nameOnly, "name", "n", false, "print version name only")
+	mainCommand.AddCommand(commandVersion)
+}
+
+// PrintVersion 打印程序版本、协议版本和构建信息。
 func PrintVersion() {
-	fmt.Println("The MIO proxy protocol V" + protocol.Version)
+	fmt.Println("mio version " + Version)
 	fmt.Println()
 	settings := make(map[string]string)
 	if info, ok := debug.ReadBuildInfo(); ok {
@@ -17,7 +44,14 @@ func PrintVersion() {
 			settings[s.Key] = s.Value
 		}
 	}
-	fmt.Println("Environment=" + runtime.Version() + " " + runtime.GOARCH)
-	fmt.Println("Commit Hash=" + settings["vcs.revision"])
-	fmt.Println("CGO_Enabled=" + settings["CGO_ENABLED"])
+	fmt.Println("Environment: " + runtime.Version() + " " + runtime.GOOS + "/" + runtime.GOARCH)
+	fmt.Println("Protocol: " + protocol.Version)
+	if revision := settings["vcs.revision"]; revision != "" {
+		fmt.Println("Revision: " + revision)
+	}
+	cgo := "disabled"
+	if settings["CGO_ENABLED"] == "1" {
+		cgo = "enabled"
+	}
+	fmt.Println("CGO: " + cgo)
 }

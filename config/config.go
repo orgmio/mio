@@ -48,17 +48,17 @@ type Outbound struct {
 func Load(path string) (Config, error) {
 	file, err := os.Open(path)
 	if err != nil {
-		return Config{}, fmt.Errorf("open configuration %q: %w", path, err)
+		return Config{}, fmt.Errorf("read config at %s: %w", path, err)
 	}
 	defer file.Close()
 
-	cfg := Config{Log: Log{Enable: true, Level: "info", Timestamp: true}}
+	cfg := Config{Log: Log{Enable: true, Level: "info"}}
 	if err := toml.NewDecoder(file).DisallowUnknownFields().Decode(&cfg); err != nil {
 		var strict *toml.StrictMissingError
 		if errors.As(err, &strict) {
-			return Config{}, fmt.Errorf("parse configuration %q: unknown field(s):\n%s", path, strict.String())
+			return Config{}, fmt.Errorf("decode config at %s: unknown field(s):\n%s", path, strict.String())
 		}
-		return Config{}, fmt.Errorf("parse configuration %q: %w", path, err)
+		return Config{}, fmt.Errorf("decode config at %s: %w", path, err)
 	}
 	if err := cfg.Validate(); err != nil {
 		return Config{}, err
@@ -75,23 +75,38 @@ func (l Log) SlogLevel() (slog.Level, error) {
 	return level, nil
 }
 
-func (cfg Config) IsServer() bool { return cfg.Inbounds.Listen != "" }
+// HasServer 表示配置了 [inbounds]，需要启动服务端。
+func (cfg Config) HasServer() bool { return cfg.Inbounds != (Inbound{}) }
+
+// HasClient 表示配置了 [outbounds]，需要启动客户端。
+func (cfg Config) HasClient() bool { return cfg.Outbounds != (Outbound{}) }
 
 func validPort(port int) bool { return port >= 1 && port <= 65535 }
 
+// Validate 检查配置：[inbounds] 和 [outbounds] 至少要有一个，两个都有则同时启动服务端和客户端。
 func (cfg *Config) Validate() error {
 	if _, err := cfg.Log.SlogLevel(); err != nil {
 		return err
 	}
-	cfg.Inbounds.Listen = strings.TrimSpace(cfg.Inbounds.Listen)
-	if cfg.IsServer() {
-		return cfg.validateServer()
+	if !cfg.HasServer() && !cfg.HasClient() {
+		return errors.New("configuration must set [outbounds] (client), [inbounds] (server), or both")
 	}
+	if cfg.HasServer() {
+		if err := cfg.validateServer(); err != nil {
+			return err
+		}
+	}
+	if cfg.HasClient() {
+		return cfg.validateClient()
+	}
+	return nil
+}
 
+func (cfg *Config) validateClient() error {
 	out := &cfg.Outbounds
 	out.SocksListen = strings.TrimSpace(out.SocksListen)
 	if out.SocksListen == "" {
-		return errors.New("configuration must set [outbounds].socks_listen (client) or [inbounds].listen (server)")
+		return errors.New("configuration must set [outbounds].socks_listen")
 	}
 	if !validPort(out.SocksListenPort) {
 		return errors.New("[outbounds].socks_listen_port must be between 1 and 65535")
@@ -121,7 +136,11 @@ func (cfg *Config) Validate() error {
 
 func (cfg *Config) validateServer() error {
 	in := &cfg.Inbounds
+	in.Listen = strings.TrimSpace(in.Listen)
 	in.Dest = strings.TrimSpace(in.Dest)
+	if in.Listen == "" {
+		return errors.New("configuration must set [inbounds].listen")
+	}
 	if !validPort(in.ListenPort) {
 		return errors.New("[inbounds].listen_port must be between 1 and 65535")
 	}

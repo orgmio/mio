@@ -1,26 +1,8 @@
 # mio 协议规范
 
 本文描述 mio 的线上格式，目的是让其他实现不看代码也能互通。
-Go 代码可以直接引用 `github.com/orgmio/mio/protocol`，见文末。
 
-## 0. 版本
-
-mio 没有单独的协议版本号，**mio 的版本号（`protocol.Version`，例如 `0.5.0`）就是协议版本**，下文记作 `VERSION`。
-它参与 TCP 认证密钥、QUIC 标记和 QUIC 认证证明的计算。版本号不同的两端在线上的表现与公钥填错完全相同：服务端把连接当作普通访问交给伪装站，客户端等不到响应。
-所以**升级时客户端和服务端必须一起升级**，哪怕只是补丁版本。
-
-## 0.1 密钥
-
-服务端持有一对 X25519 静态密钥，由 `mio keygen` 生成：
-
-- **私钥** `S`：只放在服务端（`[inbounds].private_key`）。
-- **公钥** `S_pub`：放在客户端（`[outbounds].public_key`）。客户端靠它确认对端确实是这台服务端；服务端则把「知道 `S_pub`」视为客户端获得了授权。
-
-两者都编码为不带填充的 URL 安全 base64（43 个字符）。mio 不使用密码：所有认证用的密钥都来自 X25519 共享密钥，其中没有任何低熵的值可供离线猜测；没有 `S`，也无法冒充服务端。
-
-记号：`‖` 表示字节拼接；多字节整数一律大端；`HKDF` 指 HKDF-SHA256；`AEAD` 指 AES-256-GCM（12 字节 nonce，16 字节 tag）。
-
-## 1. 总览
+## 总览
 
 mio 有两条传输路径，监听同一个端口：
 
@@ -29,9 +11,21 @@ mio 有两条传输路径，监听同一个端口：
 
 两条路径在认证之后使用相同的[目标请求](#4-目标请求)格式。
 
-## 2. TCP 路径
+## 密钥
 
-### 2.1 借用伪装站完成 TLS 握手
+服务端持有一对 X25519 静态密钥，由 `mio keygen` 生成：
+
+- **私钥** `S`：只放在服务端（`[inbounds].private_key`）。
+- **公钥** `S_pub`：放在客户端（`[outbounds].public_key`）。客户端靠它确认对端确实是这台服务端；服务端则把「知道 `S_pub`」视为客户端获得了授权。
+
+两者都编码为不带填充的 URL 安全 base64（43 个字符）。
+mio 不使用密码：所有认证用的密钥都来自 X25519 共享密钥，其中没有任何低熵的值可供离线猜测；没有 `S`，也无法冒充服务端。
+
+记号：`‖` 表示字节拼接；多字节整数一律大端；`HKDF` 指 HKDF-SHA256；`AEAD` 指 AES-256-GCM（12 字节 nonce，16 字节 tag）。
+
+## TCP 路径
+
+### 借用伪装站完成 TLS 握手
 
 1. 客户端用 Chrome 指纹（uTLS）向服务端发起 TLS 握手，SNI 为 `dest`。
 2. 服务端为每个入站连接拨号 `dest:dest_port`，按 TLS 记录双向原样转发，同时记下：
@@ -40,7 +34,7 @@ mio 有两条传输路径，监听同一个端口：
    - `server_random`：最后一条 ServerHello 的 random（出现 HelloRetryRequest 时以最后一条为准）。
 3. 客户端与真实的伪装站完成整个 TLS 握手，并按正常规则校验其证书。
 
-### 2.2 认证记录
+### 认证记录
 
 客户端在发出 ClientHello 之前就持有 `E_pub` 对应的私钥 `E`，两端可以算出同一个共享密钥：
 
@@ -61,13 +55,14 @@ record    = header ‖ AEAD-Seal(key, nonce = 0^12, plaintext, ad = header)
 
 - `client_share` = X25519 公钥（32）‖ ML-KEM-768 封装公钥（1184）。
 
-服务端在看到 ServerHello 之后，用 `S` 和 `E_pub` 算出 `shared`，对客户端发来的每一条 Application Data 记录尝试用上面的方式解密。解密成功且明文长度在 `1216+32` 到 `1216+1024` 之间即认证通过。
-认证通过后，服务端吞掉这条记录，停止转发并关闭到 `dest` 的连接；否则继续转发，对方看到的始终是伪装站。
+服务端在看到 ServerHello 之后，用 `S` 和 `E_pub` 算出 `shared`，对客户端发来的每一条 Application Data 记录尝试用上面的方式解密。
+解密成功且明文长度在 `1216+32` 到 `1216+1024` 之间即认证通过。
+认证通过后，服务端吞掉这条记录，停止转发并关闭到 `dest` 的连接；否则继续转发，中间设备甚至用户看到的始终是伪装站。
 
 因为密钥依赖每条连接都不同的 `server_random`，所以录下的认证记录无法在别的连接上重放。
 不知道 `S_pub` 的人算不出 `shared`，造不出认证记录；被动监听者也无从离线猜测，因为没有任何低熵的秘密。
 
-### 2.3 密钥交换与会话密钥
+### 密钥交换与会话密钥
 
 两个方向的密钥由下面的函数派生（代码中为 `protocol.DeriveKeys`）：
 
@@ -87,7 +82,7 @@ DeriveKeys(secret):
    能发出可解密的 ready 帧，就证明对端算得出 `shared`，也就是持有 `S`，因此中间人无法冒充服务端。
 4. 双方都切换到 `DeriveKeys(secret)`，两个方向的序号都重置为 0。此后所有记录都使用会话密钥。
 
-### 2.4 记录层与帧
+### 记录层与帧
 
 每个帧单独封装成一条 TLS Application Data 记录：
 
@@ -103,10 +98,10 @@ nonce(seq) = 0^4 ‖ seq(8)          ; seq 每个方向独立，从 0 开始，�
 frame = type(1) ‖ payload_length(2) ‖ payload ‖ padding
 ```
 
-| type | 名称  | 含义 |
-|------|-------|------|
-| 0    | ready | 服务端就绪，负载为 `server_share` |
-| 1    | data  | 应用数据，负载最长 16383 字节 |
+| type | 名称  | 含义                                   |
+| ---- | ----- | -------------------------------------- |
+| 0    | ready | 服务端就绪，负载为 `server_share`      |
+| 1    | data  | 应用数据，负载最长 16383 字节          |
 | 2    | close | 本方向不再发送数据（半关闭），负载为空 |
 
 - `padding` 是随机字节，接收方按 `payload_length` 取负载后直接丢弃剩余部分。
@@ -121,9 +116,9 @@ frame = type(1) ‖ payload_length(2) ‖ payload ‖ padding
 
 发送方会尽量让内层的一个 TLS 记录对应一个帧。如果缓冲里留着不完整的内层记录，最多等 50ms 就会把它发出。这只影响分帧方式，不影响格式。
 
-## 3. QUIC 路径
+## QUIC 路径
 
-### 3.1 标记
+### 标记
 
 客户端把 ClientHello.random 设为：
 
@@ -137,7 +132,7 @@ random     = nonce ‖ HMAC-SHA256(marker_key, nonce ‖ minute)[:16]
 服务端用 RFC 9001 的方法解开客户端的 Initial 包，取出 random，接受 `minute` 与本地相差 ±1 的标记。用过的 nonce 会被记住 5 分钟，重复的视为重放。
 没有有效标记的 UDP 流量会原样转发给伪装站。**双方时钟误差需要在 1 分钟以内。**
 
-### 3.2 握手与认证
+### 握手与认证
 
 服务端使用临时自签证书，ALPN 为 `h3`，TLS 1.3；客户端不校验这个证书，对端身份由下面的证明确认。
 
@@ -154,11 +149,11 @@ key      = HKDF(ikm = shared, salt = exporter, info = "mio quic auth " ‖ VERSI
 
 只有持有 `S` 的一方能算出服务端的回复，所以即使客户端不校验证书，中间人也无法冒充服务端。
 
-### 3.3 数据
+### 数据
 
 之后客户端每发起一个代理连接就打开一个新的双向 stream，先交换[目标请求](#4-目标请求)，再直接传输原始字节。QUIC 本身已经加密，所以这里不再套用第 2.4 节的帧格式。
 
-## 4. 目标请求
+## 目标请求
 
 认证后的第一段数据是客户端发出的目标地址：
 
@@ -172,28 +167,33 @@ request = atyp(1) ‖ address ‖ port(2)
 服务端连接目标后回复 1 字节：`0` 表示成功，`1` 表示失败。成功之后双向转发数据。
 在 TCP 路径上，请求和应答各自放在一个 data 帧里；在 QUIC 路径上，直接写在 stream 上。
 
-## 5. 在 Go 中引用
+## 在其他Go语言项目中引入
+
+如果您开发一款通用代理内核希望引入mio协议，mio提供导出函数以供您方便的引入。
 
 ```go
 import "github.com/orgmio/mio/protocol"
 ```
 
-| 接口 | 作用 |
-|------|------|
-| `DialTCP(ctx, Peer, target)` | 完整的客户端 TCP 路径，返回已加密、已连上目标的连接 |
-| `Handshake(ctx, conn, Peer)` | 只做客户端握手（2.1–2.3），返回 `*Conn` |
-| `VerifyAuth` / `Accept` | 服务端认证与握手 |
-| `GenerateKeyPair` / `ParsePrivateKey` / `ParsePublicKey` | 0.1 节的密钥生成与解析 |
-| `Conn` / `NewConn` | 2.4 节的记录层，可配合自己的握手使用 |
-| `DeriveKeys` | 2.3 节的密钥派生 |
-| `PaddingPolicy` / `DefaultPadding` | 填充策略，可通过 `Conn.SetPaddingPolicy` 替换 |
-| `WriteRequest` / `ReadRequest` / `WriteReply` / `ReadReply` | 第 4 节的请求格式 |
-| `protocol/quicauth` | 第 3 节的标记、重放缓存与认证（`ClientAuth` / `ServerAuth`） |
-| `Version` | 第 0 节的版本号，引用方必须与对端完全一致 |
+| 接口                                                        | 作用                                                |
+| ----------------------------------------------------------- | --------------------------------------------------- |
+| `DialTCP(ctx, Peer, target)`                                | 完整的客户端 TCP 路径，返回已加密、已连上目标的连接 |
+| `Handshake(ctx, conn, Peer)`                                | 只做客户端握手（2.1–2.3），返回 `*Conn`             |
+| `VerifyAuth` / `Accept`                                     | 服务端认证与握手                                    |
+| `GenerateKeyPair` / `ParsePrivateKey` / `ParsePublicKey`    | 密钥生成与解析                                      |
+| `Conn` / `NewConn`                                          | 记录层，可配合自己的握手使用                        |
+| `DeriveKeys`                                                | 密钥派生                                            |
+| `PaddingPolicy` / `DefaultPadding`                          | 填充策略，可通过 `Conn.SetPaddingPolicy` 替换       |
+| `WriteRequest` / `ReadRequest` / `WriteReply` / `ReadReply` | 请求格式                                            |
+| `protocol/quicauth`                                         | 标记、重放缓存与认证（`ClientAuth` / `ServerAuth`） |
+| `Version`                                                   | 引用方必须与对端完全一致                            |
 
 `protocol` 及其子包不依赖 quic-go。只有引用 `client`、`server` 包时才需要 quic-go，而且这时需要在自己的 `go.mod` 里加上与 mio 相同的 `replace`：
 
-```
+因为mio为了加速UDP部分，引入了已经成熟的由hysteria2社区维护的quic-go。
+但hysteria2社区将他们的github组织名改了，而包名没改，所以这里做一个重定向。
+
+```text
 replace github.com/apernet/quic-go => github.com/HyNetworks/quic-go v0.65.1-0.20261109005002-2895f039137a
 ```
 

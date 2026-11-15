@@ -99,7 +99,7 @@ func dialQUIC(ctx context.Context, peer protocol.Peer) (*quicSession, error) {
 	session := &quicSession{conn: conn, transport: transport, udp: udp}
 	if err := session.authenticate(ctx, peer.PublicKey); err != nil {
 		session.Close()
-		return nil, fmt.Errorf("quic auth failed (wrong public key, or server is not running mio %s): %w", protocol.Version, err)
+		return nil, fmt.Errorf("quic auth failed (wrong public key, or server is not running mio protocol %s): %w", protocol.Version, err)
 	}
 	return session, nil
 }

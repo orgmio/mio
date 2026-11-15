@@ -24,29 +24,6 @@
 
 转到 [文档](https://github.com/orgmio/mio/tree/main/docs) 以获取详细说明。
 
-需要服务端和客户端同时开启TCP和UDP才可完整发挥mio的功能。
-
-**客户端和服务端的版本号必须完全一致**，版本号参与认证，不一致就连不上，升级时请两端一起升级。
-
-mio默认禁止向socks5隧道中发送UDP数据，原因和hysteria2一致，
-在QUIC里面套QUIC会导致Hysteria2自己的流控无法识别从而出现性能问题。
-mio也是同理，而且禁止QUIC对正常上网没有任何影响。
-
-DNS部分，因为该仓库只是一个代理协议的概念验证，
-
-所以解析服务端域名直接使用客户端本地DNS；
-解析通过代理的域名和伪装域名均通过服务端DNS进行解析。
-
-## 📦 作为库使用
-
-mio 的加密和帧格式可以直接引用：
-
-```go
-import "github.com/orgmio/mio/protocol"
-```
-
-线上格式与接口说明见 [协议规范](docs/protocol.md)。
-
 ## ⚖️ 条款
 
 此项目基于[Mo Public License](https://867678.xyz/docs/mopl)授权。

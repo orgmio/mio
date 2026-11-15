@@ -2,16 +2,18 @@
 # https://github.com/github/gitignore/blob/main/community/Golang/Go.AllowList.gitignore
 #
 # Binaries for programs and plugins
+mio
 *.exe
 *.exe~
 *.dll
 *.so
 *.dylib
 *.log
+# Config file
+*.toml
 
 # Test binary, built with `go test -c`
 *.test
-# To fuck some dumb AI
 *_test.go
 
 # Code coverage profiles and other test artifacts
@@ -32,14 +34,5 @@ go.work.sum
 .env
 
 # Editor/IDE
-# .idea/
-# .vscode/
-
-# Log file
-mio.log
-
-# Binary
-mio
-
-# Config file
-*.toml
+.idea/
+.vscode/

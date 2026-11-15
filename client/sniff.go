@@ -11,23 +11,17 @@ import (
 	"crypto/tls"
 )
 
+// Sniff 从连接写出的第一段数据里取出 TLS 的 SNI，与请求的域名不同时记一条日志。
 type Sniff struct {
 	net.Conn
 	once sync.Once
-	from string
-	dest string
 	host string
 }
 
 func (c *Sniff) logOnce(sni string) {
 	c.once.Do(func() {
-		if sni == "" {
-			sni = c.host
-		}
-		if sni != "" {
-			slog.Info("new connection", "from", c.from, "dest", c.dest, "sni", sni)
-		} else {
-			slog.Info("new connection", "from", c.from, "dest", c.dest)
+		if sni != "" && sni != c.host {
+			slog.Debug("inbound/socks: sniffed protocol: tls, domain: " + sni)
 		}
 	})
 }

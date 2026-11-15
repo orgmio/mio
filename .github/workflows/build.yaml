@@ -13,20 +13,24 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - tag: "GOAMD64=v4"
+          - tag: "GOAMD64=v4 CC=gcc"
             dickname: "linux-amd64v4-glibc"
-          - tag: "GOAMD64=v3"
+          - tag: "GOAMD64=v3 CC=gcc"
             dickname: "linux-amd64v3-glibc"
-          - tag: "GOAMD64=v2"
+          - tag: "GOAMD64=v2 CC=gcc"
             dickname: "linux-amd64v2-glibc"
-          - tag: "GOAMD64=v1"
+          - tag: "GOAMD64=v1 CC=gcc"
             dickname: "linux-amd64v1-glibc"
-          - tag: "CGO_ENABLED=1"
+          - tag: "CGO_ENABLED=1 CC=gcc"
             dickname: "linux-amd64-glibc"
-          - tag: "CGO_ENABLED=0"
+          - tag: "CGO_ENABLED=0 CC=musl-gcc"
             dickname: "linux-amd64-musl"
-          - tag: "GOARCH=arm64"
-            dickname: "linux-arm64-musl"
+          - tag: "CGO_ENABLED=0"
+            dickname: "linux-amd64-static"
+          - tag: "CGO_ENABLED=0 GOARCH=arm64 GOARM64=8.0 CC=gcc"
+            dickname: "linux-arm64v8-glibc"
+          - tag: "CGO_ENABLED=0 GOARCH=arm64"
+            dickname: "linux-arm64"
           - tag: "GOOS=darwin GOARCH=arm64"
             dickname: "darwin-arm64"
           - tag: "GOOS=windows GOARCH=amd64"
@@ -40,18 +44,18 @@ jobs:
         id: get_version
         shell: bash
         run: |
-          echo "version=$(grep 'const Version' protocol/version.go | cut -d'"' -f2)" >> $GITHUB_OUTPUT
-          mv go.mod go.mod.backup
+          echo "version=$(grep 'const Version' cmd/version.go | cut -d'"' -f2)" >> $GITHUB_OUTPUT
 
       - name: Set up Go
         uses: actions/setup-go@main
         with:
           go-version: "stable"
+          cache: false
 
       - name: Build!
         shell: bash
         run: |
-          mv go.mod.backup go.mod
+          sudo apt-get install -y musl musl-dev musl-tools
           ${{ matrix.tag }} go build -o ./mio-${{ matrix.dickname }} .
 
       - name: Release
