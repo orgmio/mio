@@ -24,6 +24,18 @@
 
 转到 [文档](https://github.com/orgmio/mio/tree/main/docs) 以获取详细说明。
 
+## N 关于名称
+
+之前他的仓库叫做ixa-go，名称是我随便想的。
+后面更名为mio，因为我感觉ixa不太方便输入，而m i o三个拉丁字母非常方便。
+并且也很符合他代理工具的特性，
+
+因为m可以理解为machine（机器）
+i可以理解为input（输入）
+o可以理解为output（输出）
+
+也就是一个机器在输入和输出，十分符合他网络工具的特点。
+
 ## ⚖️ 条款
 
 此项目基于[Mo Public License](https://867678.xyz/docs/mopl)授权。

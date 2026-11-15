@@ -12,7 +12,7 @@ import (
 
 // Version 是 mio 的程序版本，发布新版本时改这里。
 // 它与协议版本（protocol.Version）无关，只提升它不影响新旧版本互通。
-const Version = "0.5.3"
+const Version = "0.5.4"
 
 var nameOnly bool
 
@@ -36,7 +36,9 @@ func init() {
 
 // PrintVersion 打印程序版本、协议版本和构建信息。
 func PrintVersion() {
-	fmt.Println("mio version " + Version)
+	fmt.Println("The mio Proxy Protocol")
+	fmt.Println("Binary version " + Version)
+	fmt.Println("Protocol version: " + protocol.Version)
 	fmt.Println()
 	settings := make(map[string]string)
 	if info, ok := debug.ReadBuildInfo(); ok {
@@ -45,7 +47,6 @@ func PrintVersion() {
 		}
 	}
 	fmt.Println("Environment: " + runtime.Version() + " " + runtime.GOOS + "/" + runtime.GOARCH)
-	fmt.Println("Protocol: " + protocol.Version)
 	if revision := settings["vcs.revision"]; revision != "" {
 		fmt.Println("Revision: " + revision)
 	}
