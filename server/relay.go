@@ -11,12 +11,12 @@ import (
 	"github.com/orgmio/mio/protocol"
 )
 
-// relay 在客户端与真站之间转发 TLS 记录，直到客户端发来合法的认证记录，之后返回加密连接。
-func (s *Server) relay(client, dest net.Conn) (net.Conn, bool) {
+// relay 在客户端与真站之间转发 TLS 记录，直到客户端发来合法的认证记录，之后返回加密会话。
+func (s *Server) relay(client, dest net.Conn) (*protocol.Session, bool) {
 	clientReader := bufio.NewReader(client)
 	var serverRandom atomic.Pointer[[]byte]
 	var clientRandom, clientKeyShare []byte // 仅在客户端方向的转发协程中读写
-	var shared, share []byte
+	var shared []byte
 	var connectionClaimed atomic.Bool
 
 	camouflageStopped := make(chan struct{})
@@ -45,7 +45,7 @@ func (s *Server) relay(client, dest net.Conn) (net.Conn, bool) {
 			return false
 		}
 		var ok bool
-		shared, share, ok = protocol.VerifyAuth(s.key, clientKeyShare, clientRandom, *random, header, body)
+		shared, ok = protocol.VerifyAuth(s.key, clientKeyShare, clientRandom, *random, header, body)
 		return ok
 	})
 
@@ -58,6 +58,6 @@ func (s *Server) relay(client, dest net.Conn) (net.Conn, bool) {
 	if !authenticated || clientRandom == nil {
 		return nil, false
 	}
-	conn, err := protocol.Accept(client, clientReader, shared, clientRandom, *serverRandom.Load(), share)
-	return conn, err == nil
+	session, err := protocol.Accept(client, clientReader, shared, clientRandom, *serverRandom.Load())
+	return session, err == nil
 }

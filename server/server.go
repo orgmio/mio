@@ -101,11 +101,21 @@ func (s *Server) serve(ctx context.Context, client net.Conn) {
 		return
 	}
 
-	conn, ok := s.relay(client, dest)
+	session, ok := s.relay(client, dest)
 	if !ok {
 		slog.Debug("inbound/mio: connection from " + client.RemoteAddr().String() + " ended without authentication")
 		client.Close()
 		return
 	}
-	s.proxy(ctx, conn)
+	// 一条认证过的连接上可以有多条流，每条流是一个代理请求。
+	stop := context.AfterFunc(ctx, func() { session.Close() })
+	defer stop()
+	defer session.Close()
+	for {
+		stream, err := session.Accept()
+		if err != nil {
+			return
+		}
+		go s.proxy(ctx, stream)
+	}
 }

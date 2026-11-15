@@ -38,6 +38,7 @@ type dialResult struct {
 // Dialer 会并行探测 TCP 和 QUIC，随后在 10 到 30 分钟后重新比较两者。
 type Dialer struct {
 	peer protocol.Peer
+	tcp  *tcpPool
 
 	mu          sync.Mutex
 	session     *quicSession
@@ -49,7 +50,7 @@ type Dialer struct {
 }
 
 func NewDialer(peer protocol.Peer) *Dialer {
-	return &Dialer{peer: peer}
+	return &Dialer{peer: peer, tcp: newTCPPool(peer)}
 }
 
 func (d *Dialer) WarmUp(ctx context.Context) {
@@ -123,7 +124,7 @@ func (d *Dialer) dialSelected(ctx context.Context, target string, selected trans
 		slog.Debug("outbound/mio: h3 stream failed, falling back to tcp", "err", err)
 	}
 
-	conn, tcpErr := protocol.DialTCP(ctx, d.peer, target)
+	conn, tcpErr := d.tcp.dial(ctx, target)
 	if tcpErr == nil || errors.Is(tcpErr, protocol.ErrConnectFailed) || ctx.Err() != nil {
 		return conn, tcpErr
 	}
@@ -200,7 +201,7 @@ func (d *Dialer) probe(ctx context.Context, target string) (net.Conn, error) {
 
 func (d *Dialer) dialTCPResult(ctx context.Context, target string) dialResult {
 	started := time.Now()
-	conn, err := protocol.DialTCP(ctx, d.peer, target)
+	conn, err := d.tcp.dial(ctx, target)
 	return dialResult{transport: transportTCP, conn: conn, elapsed: time.Since(started), err: err}
 }
 

@@ -69,18 +69,26 @@ func (h *logHandler) Handle(_ context.Context, record slog.Record) error {
 	var line strings.Builder
 	switch h.timestamp {
 	case timestampFull:
-		line.WriteString(record.Time.Format(timestampFormat) + " " + name + " ")
+		line.WriteString(record.Time.Format(timestampFormat))
+		line.WriteString(" ")
+		line.WriteString(name)
+		line.WriteString(" ")
 	case timestampNone:
-		line.WriteString(name + " ")
+		line.WriteString(name)
+		line.WriteString(" ")
 	default:
 		fmt.Fprintf(&line, "%s[%04d] ", name, int(record.Time.Sub(startTime)/time.Second))
 	}
 	line.WriteString(record.Message)
 	record.Attrs(func(attr slog.Attr) bool {
 		if attr.Key == "err" {
-			line.WriteString(": " + attr.Value.String())
+			line.WriteString(": ")
+			line.WriteString(attr.Value.String())
 		} else {
-			line.WriteString(" " + attr.Key + "=" + attr.Value.String())
+			line.WriteString(" ")
+			line.WriteString(attr.Key)
+			line.WriteString("=")
+			line.WriteString(attr.Value.String())
 		}
 		return true
 	})

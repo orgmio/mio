@@ -12,7 +12,7 @@ import (
 
 // Version 是 mio 的程序版本，发布新版本时改这里。
 // 它与协议版本（protocol.Version）无关，只提升它不影响新旧版本互通。
-const Version = "0.5.2"
+const Version = "0.5.3"
 
 var nameOnly bool
 

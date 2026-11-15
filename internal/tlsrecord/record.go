@@ -32,31 +32,6 @@ func ValidHeader(header []byte) bool {
 		int(binary.BigEndian.Uint16(header[3:HeaderSize])) <= MaxBody
 }
 
-// Length 返回以 data 开头的 TLS 记录总长度（含记录头）；不像 TLS 记录时 ok 为 false。
-func Length(data []byte) (total int, ok bool) {
-	if !ValidHeader(data) {
-		return 0, false
-	}
-	return HeaderSize + int(binary.BigEndian.Uint16(data[3:HeaderSize])), true
-}
-
-// IsPossiblePrefix 判断不足 5 字节的 prefix 是否可能是某条 TLS 记录头的开头。
-func IsPossiblePrefix(prefix []byte) bool {
-	if len(prefix) == 0 || len(prefix) >= HeaderSize {
-		return false
-	}
-	if prefix[0] < 0x14 || prefix[0] > TypeAppData {
-		return false
-	}
-	if len(prefix) >= 2 && prefix[1] != 0x03 {
-		return false
-	}
-	if len(prefix) >= 3 && (prefix[2] < 0x01 || prefix[2] > 0x04) {
-		return false
-	}
-	return true
-}
-
 // CopyRecords 按 TLS 记录从 src 转发到 dst；inspect 返回 true 时吞掉该记录并以 ErrAuthenticated 结束。
 // 一旦数据不像 TLS，就停止解析并原样转发剩余内容。
 func CopyRecords(dst io.Writer, src *bufio.Reader, inspect func(header, body []byte) bool) error {

@@ -3,12 +3,15 @@ package client
 import (
 	"bytes"
 	"errors"
+	"io"
 	"log/slog"
 	"net"
 	"sync"
 	"time"
 
 	"crypto/tls"
+
+	"github.com/orgmio/mio/protocol"
 )
 
 // Sniff 从连接写出的第一段数据里取出 TLS 的 SNI，与请求的域名不同时记一条日志。
@@ -29,6 +32,28 @@ func (c *Sniff) logOnce(sni string) {
 func (c *Sniff) Write(p []byte) (int, error) {
 	c.logOnce(parseSNI(p))
 	return c.Conn.Write(p)
+}
+
+// ReadFrom 让 io.Copy 按 mio 一个帧的大小读取，理由见 protocol 包里流的 ReadFrom。
+func (c *Sniff) ReadFrom(r io.Reader) (int64, error) {
+	buf := make([]byte, protocol.MaxFramePayload)
+	var total int64
+	for {
+		n, err := r.Read(buf)
+		if n > 0 {
+			written, writeErr := c.Write(buf[:n])
+			total += int64(written)
+			if writeErr != nil {
+				return total, writeErr
+			}
+		}
+		if err == io.EOF {
+			return total, nil
+		}
+		if err != nil {
+			return total, err
+		}
+	}
 }
 
 func (c *Sniff) Close() error {
