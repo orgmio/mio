@@ -36,6 +36,13 @@ mio基于Go语言编写，所以产物是一个二进制文件。
 
 ### 对于systemd系统
 
+首先要创建一个叫做mio的用户和把`/etc/mio`目录交给这个用户。
+```bash
+mkdir -p /etc/mio/
+useradd -rs /sbin/nologin mio
+chown -R mio:mio /etc/mio/
+```
+
 下面的内容应该出现在`/usr/lib/systemd/system/mio.service`文件中。
 
 ```
@@ -62,3 +69,5 @@ WantedBy=multi-user.target
 ```
 
 这段systemd文件会启动一个位于`/usr/bin/mio`的二进制文件，并附带参数`run -c /etc/mio/config.toml`。
+
+同时不要在配置文件的`[log]`中写`output`字段，直接要日志输出给systemd是最好的解决方式。
