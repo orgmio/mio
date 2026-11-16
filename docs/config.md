@@ -82,6 +82,7 @@ public_key = "mio keygen 输出的 PublicKey"
 listen = "0.0.0.0"
 listen_port = 443
 dest = "one.one.one.one"
+dest_port = 443
 private_key = "mio keygen 输出的 PrivateKey"
 ```
 
