@@ -22,6 +22,15 @@ const (
 // ErrAuthenticated 表示 CopyRecords 的 inspect 认出了认证记录并停止转发。
 var ErrAuthenticated = errors.New("authenticated")
 
+// Action 是 CopyRecords 的 inspect 对一条记录的处置。
+type Action int
+
+const (
+	Forward     Action = iota // 转发这条记录，继续检查后面的记录
+	Claim                     // 吞掉这条记录，以 ErrAuthenticated 结束
+	Passthrough               // 转发这条记录，之后不再解析，原样转发剩余内容
+)
+
 // ValidHeader 判断 5 字节记录头是否像一条 TLS 记录。
 func ValidHeader(header []byte) bool {
 	if len(header) < HeaderSize {
@@ -32,12 +41,20 @@ func ValidHeader(header []byte) bool {
 		int(binary.BigEndian.Uint16(header[3:HeaderSize])) <= MaxBody
 }
 
-// CopyRecords 按 TLS 记录从 src 转发到 dst；inspect 返回 true 时吞掉该记录并以 ErrAuthenticated 结束。
-// 一旦数据不像 TLS，就停止解析并原样转发剩余内容。
-func CopyRecords(dst io.Writer, src *bufio.Reader, inspect func(header, body []byte) bool) error {
+// CleanEOF 判断 CopyRecords 的返回值是否表示 src 正常结束（对端发了 FIN），而不是读写出错。
+func CleanEOF(err error) bool {
+	return err == nil || errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF)
+}
+
+// CopyRecords 按 TLS 记录从 src 转发到 dst，每条记录交给 inspect 决定如何处置。
+// 一旦数据不像 TLS，就停止解析并原样转发剩余内容。src 结束时，已读到的不完整记录也会照样转发。
+func CopyRecords(dst io.Writer, src *bufio.Reader, inspect func(header, body []byte) Action) error {
 	header := make([]byte, HeaderSize)
 	for {
-		if _, err := io.ReadFull(src, header); err != nil {
+		if n, err := io.ReadFull(src, header); err != nil {
+			if n > 0 {
+				dst.Write(header[:n])
+			}
 			return err
 		}
 		if !ValidHeader(header) {
@@ -56,10 +73,15 @@ func CopyRecords(dst io.Writer, src *bufio.Reader, inspect func(header, body []b
 			dst.Write(record[:HeaderSize+n])
 			return err
 		}
-		if inspect(header, record[HeaderSize:]) {
+		action := inspect(header, record[HeaderSize:])
+		if action == Claim {
 			return ErrAuthenticated
 		}
 		if _, err := dst.Write(record); err != nil {
+			return err
+		}
+		if action == Passthrough {
+			_, err := io.Copy(dst, src)
 			return err
 		}
 	}

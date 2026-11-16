@@ -14,13 +14,15 @@ mio使用 TOML 作为配置文件格式。
 
 ## 密钥
 
-自版本0.5.1起，mio 不使用密码，而是使用一对密钥。在服务端运行：
+自版本0.5.1起，mio使用一对密钥。
+
+在服务端运行：
 
 ```bash
 mio keygen
 ```
 
-输出的`PrivateKey`填进服务端的`[inbounds].private_key`，`PublicKey`填进客户端的`[outbounds].public_key`。
+以生成这对预共享密钥。
 
 ## 日志
 
@@ -50,13 +52,12 @@ socks_listen_port = 10808
 server = "1.1.1.1"
 server_port = 443
 dest = "one.one.one.one"
-dest_port = 443
 public_key = "mio keygen 输出的 PublicKey"
 ```
 
 - outbounds字段
 
-> 该项目内置的socks5不支持设置密码，因socks5只是一个连接器，请勿监听到公网地址。
+> 该项目内置的socks5不支持设置密码，因socks5只是一个连接器。
 
 `socks_listen`：本地socks5监听的IP地址。
 
@@ -68,7 +69,7 @@ public_key = "mio keygen 输出的 PublicKey"
 
 `dest`：伪装目标地址，可以是域名或IP地址。
 
-`dest_port`：伪装目标端口。
+`dest_port`：选填。客户端不使用这个值，可以不写。
 
 `public_key`：服务端公钥，即服务端运行`mio keygen`输出的`PublicKey`。
 
@@ -81,13 +82,12 @@ public_key = "mio keygen 输出的 PublicKey"
 listen = "0.0.0.0"
 listen_port = 443
 dest = "one.one.one.one"
-dest_port = 443
 private_key = "mio keygen 输出的 PrivateKey"
 ```
 
 - inbounds字段
 
-> 注意：`dest`需与客户端`[outbounds].dest`一致，否则客户端校验证书会失败。
+> `dest`需与客户端`[outbounds].dest`一致，否则客户端校验证书会失败。
 
 `listen`：服务端监听的IP地址。
 
@@ -95,8 +95,6 @@ private_key = "mio keygen 输出的 PrivateKey"
 
 `dest`：伪装目标地址，可以是域名或IP地址。
 
-`dest_port`：伪装目标端口。
+`dest_port`：选填，伪装目标端口。填写时转发到这个端口；不填时转发到与`listen_port`相同的端口。
 
-`private_key`：服务端私钥，即`mio keygen`输出的`PrivateKey`，不要泄露给任何人。
-
-> 配置文件中出现未知字段时mio会直接报错，旧版的`[socks5]`、`[peer]`、`[listen]`、`port`、`path`、`password`需要改成上面的新名字。
+`private_key`：服务端私钥，即`mio keygen`输出的`PrivateKey`。

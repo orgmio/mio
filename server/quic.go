@@ -28,6 +28,9 @@ func (s *Server) startQUIC(ctx context.Context) (func() error, error) {
 	if err != nil {
 		return nil, err
 	}
+	// quic-go 拿到的是分流后的 virtualConn，不会替我们调大内核缓冲，这里自己调；超过系统上限时内核会按上限截断。
+	sock.SetReadBuffer(udpBufferSize)
+	sock.SetWriteBuffer(udpBufferSize)
 	cert, err := selfSignedCert(s.cfg.Dest)
 	if err != nil {
 		sock.Close()

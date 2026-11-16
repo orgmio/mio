@@ -59,8 +59,9 @@ record = header ‖ AEAD-Seal(key, nonce, plaintext, ad = header)
 - 认证记录的明文只有随机填充，它的作用是证明发送方算得出 `key`。记录体因此固定是 87 字节，
   与 Chrome 在 HTTP/2 连接开头发出的第一条记录（连接前言、SETTINGS 和 WINDOW_UPDATE）一样长（Chromium 157 实测）；紧随其后的份额记录则处在浏览器第一个请求的位置上。
 
-服务端在看到 ServerHello 之后，用 `S` 和 `E_pub` 算出 `shared`，对客户端发来的每一条 Application Data 记录尝试按认证记录的方式解密。
-解密成功且明文不超过 256 字节即认证通过。
+服务端在看到 ServerHello 之后，用 `S` 和 `E_pub` 算出 `shared`，对客户端随后发来的 Application Data 记录尝试按认证记录的方式解密。
+解密成功且明文不超过 256 字节即认证通过。服务端只尝试握手后的前 8 条记录，之后这条连接只做原样转发，所以认证记录必须紧跟在握手之后发出。
+出现 HelloRetryRequest 时，`E_pub` 取第一条 ClientHello 里的份额。
 认证通过后，服务端吞掉这条记录，停止转发并关闭到 `dest` 的连接；否则继续转发，中间设备甚至用户看到的始终是伪装站。
 随后服务端读取下一条记录，它必须是能解开的份额记录（明文不少于 1216 字节），否则关闭连接。份额记录须在 5 秒内到达。
 
@@ -219,7 +220,7 @@ import "github.com/orgmio/mio/protocol"
 
 `protocol` 及其子包不依赖 quic-go。只有引用 `client`、`server` 包时才需要 quic-go，而且这时需要在自己的 `go.mod` 里加上与 mio 相同的 `replace`：
 
-因为mio为了加速UDP部分，引入了已经成熟的由hysteria2社区维护的quic-go。
+因为mio为了加速UDP部分，引入了已经成熟的由hysteria社区维护的quic-go。
 但hysteria2社区将他们的github组织名改了，而包名没改，所以这里做一个重定向。
 
 ```text

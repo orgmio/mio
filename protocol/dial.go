@@ -2,9 +2,11 @@ package protocol
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
+	"os"
 	"strconv"
 	"time"
 )
@@ -43,6 +45,7 @@ func (s *Session) Dial(ctx context.Context, target string) (net.Conn, error) {
 	defer stop()
 
 	conn.(*stream).SetNextPadding(16, 512)
+	started := time.Now()
 	if err := WriteRequest(conn, target); err != nil {
 		conn.Close()
 		return nil, fmt.Errorf("peer %s: send request: %w", address, err)
@@ -52,6 +55,11 @@ func (s *Session) Dial(ctx context.Context, target string) (net.Conn, error) {
 		conn.Close()
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
+		}
+		// 服务端总会在 replyTimeout 之内应答。等到超时，而且这段时间整条连接上什么都没收到，
+		// 说明连接已经悄悄断了（换了网络、休眠后唤醒），关掉它，免得后面的请求继续往上面发。
+		if errors.Is(err, os.ErrDeadlineExceeded) && s.lastRecv.Load() < started.UnixNano() {
+			s.closeWithError(errors.New("no response from peer"))
 		}
 		return nil, fmt.Errorf("peer %s: %w", address, err)
 	}

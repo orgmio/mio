@@ -10,6 +10,7 @@ import (
 	"net"
 	"os"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/orgmio/mio/internal/tlsrecord"
@@ -45,6 +46,8 @@ type Session struct {
 	recv    cipher.AEAD
 	recvSeq uint64
 	readBuf []byte
+	// lastRecv 是最近一次收到对端记录的时间（UnixNano），用来判断连接是否已经悄悄断了。
+	lastRecv atomic.Int64
 
 	// openMu 让客户端新流的第一个帧按编号顺序写出：编号在持有它时分配，第一个帧在释放它之前写完。
 	openMu sync.Mutex
@@ -299,6 +302,7 @@ func (s *Session) readFrame(skipForeign bool) (typ byte, id uint32, payload []by
 			return 0, 0, nil, errors.New("decrypt record failed")
 		}
 		s.recvSeq++
+		s.lastRecv.Store(time.Now().UnixNano())
 		if len(plain) < FrameHeaderSize {
 			return 0, 0, nil, errors.New("short frame")
 		}

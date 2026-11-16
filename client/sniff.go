@@ -21,16 +21,13 @@ type Sniff struct {
 	host string
 }
 
-func (c *Sniff) logOnce(sni string) {
+func (c *Sniff) Write(p []byte) (int, error) {
+	// 只看第一段数据，之后的写入不再解析。
 	c.once.Do(func() {
-		if sni != "" && sni != c.host {
+		if sni := parseSNI(p); sni != "" && sni != c.host {
 			slog.Debug("inbound/socks: sniffed protocol: tls, domain: " + sni)
 		}
 	})
-}
-
-func (c *Sniff) Write(p []byte) (int, error) {
-	c.logOnce(parseSNI(p))
 	return c.Conn.Write(p)
 }
 
@@ -54,11 +51,6 @@ func (c *Sniff) ReadFrom(r io.Reader) (int64, error) {
 			return total, err
 		}
 	}
-}
-
-func (c *Sniff) Close() error {
-	c.logOnce("")
-	return c.Conn.Close()
 }
 
 func (c *Sniff) CloseWrite() error {

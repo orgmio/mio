@@ -104,7 +104,7 @@ func dialQUIC(ctx context.Context, peer protocol.Peer) (*quicSession, error) {
 	return session, nil
 }
 
-// authenticate 在首个 stream 上交换绑定 TLS 导出密钥的 HMAC，双方都证明持有密码。
+// authenticate 在首个 stream 上交换绑定 TLS 导出密钥的 HMAC，服务端证明持有私钥，客户端证明知道公钥。
 func (s *quicSession) authenticate(parent context.Context, server *ecdh.PublicKey) error {
 	state := s.conn.ConnectionState()
 	exporter, err := state.TLS.ExportKeyingMaterial(quicauth.ExporterLabel, nil, 32)

@@ -7,9 +7,12 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"slices"
 	"time"
 
 	utls "github.com/refraction-networking/utls"
+
+	"github.com/orgmio/mio/protocol/padding"
 )
 
 const (
@@ -18,6 +21,34 @@ const (
 	shareTimeout = 5 * time.Second
 )
 
+// mlDSASignatureSchemes 是 Chrome 在签名算法列表开头声明的三个后量子签名算法：ML-DSA-44、ML-DSA-65、ML-DSA-87。
+var mlDSASignatureSchemes = []utls.SignatureScheme{0x0904, 0x0905, 0x0906}
+
+// chromeSpec 返回客户端使用的 ClientHello 规格：uTLS 自带的 Chrome 指纹，再补上它还没跟进的部分。
+// 用 Brave 157（Chromium 157）实测，signature_algorithms 比 uTLS 的 Chrome 133 多出开头的四项：
+// 一个 GREASE 值和三个 ML-DSA 算法。uTLS 跟进之后这里不会重复添加。
+func chromeSpec() (utls.ClientHelloSpec, error) {
+	spec, err := utls.UTLSIdToSpec(utls.HelloChrome_Auto)
+	if err != nil {
+		return spec, err
+	}
+	for _, extension := range spec.Extensions {
+		sig, ok := extension.(*utls.SignatureAlgorithmsExtension)
+		if !ok || slices.Contains(sig.SupportedSignatureAlgorithms, mlDSASignatureSchemes[0]) {
+			continue
+		}
+		// GREASE 值形如 0x?a?a，每条连接随机取一个。
+		n, err := padding.RandomInt(0, 15)
+		if err != nil {
+			return spec, err
+		}
+		schemes := []utls.SignatureScheme{utls.SignatureScheme(0x0a0a + 0x1010*n)}
+		schemes = append(schemes, mlDSASignatureSchemes...)
+		sig.SupportedSignatureAlgorithms = append(schemes, sig.SupportedSignatureAlgorithms...)
+	}
+	return spec, nil
+}
+
 // Handshake 是客户端握手：经服务端中转与真站完成 TLS 握手，用 ClientHello 里 X25519 key_share 的私钥
 // 与服务端公钥算出共享密钥，随即发送认证记录和份额记录，在 readyTimeout 内等待服务端的就绪帧，再用混合密钥交换的结果换成会话密钥。
 // 返回的会话上可以用 Open 或 Dial 打开多条流。
@@ -25,7 +56,14 @@ func Handshake(ctx context.Context, raw net.Conn, peer Peer) (*Session, error) {
 	if peer.PublicKey == nil {
 		return nil, errors.New("missing server public key")
 	}
-	conn := utls.UClient(raw, &utls.Config{ServerName: peer.Dest}, utls.HelloChrome_Auto)
+	spec, err := chromeSpec()
+	if err != nil {
+		return nil, fmt.Errorf("build client hello: %w", err)
+	}
+	conn := utls.UClient(raw, &utls.Config{ServerName: peer.Dest}, utls.HelloCustom)
+	if err := conn.ApplyPreset(&spec); err != nil {
+		return nil, fmt.Errorf("build client hello: %w", err)
+	}
 	if err := conn.BuildHandshakeState(); err != nil {
 		return nil, fmt.Errorf("build client hello: %w", err)
 	}

@@ -32,6 +32,10 @@ func New(cfg config.Inbound) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
+	// dest_port 没填时，转发到伪装站上与监听端口相同的端口。
+	if cfg.DestPort == 0 {
+		cfg.DestPort = cfg.ListenPort
+	}
 	return &Server{cfg: cfg, key: key}, nil
 }
 

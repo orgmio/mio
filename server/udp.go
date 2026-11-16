@@ -19,6 +19,12 @@ const (
 	relayIdle       = 2 * time.Minute
 	mioFlowIdle     = 10 * time.Minute
 	virtualQueueLen = 1024
+	// maxUnknownFlows 是同时存在的未认证流（等待中的和转发给真站的）的上限，超出后新来源的包直接丢弃，
+	// 以免有人换着源地址发包耗尽文件描述符和内存。
+	maxUnknownFlows = 1024
+	// relayBufferSize 是读取真站回包的缓冲，足够装下一个 QUIC 数据报。
+	relayBufferSize = 2048
+	udpBufferSize   = 7 << 20
 )
 
 type flowKind int
@@ -43,8 +49,9 @@ type demux struct {
 	replay  *quicauth.ReplayCache
 	virtual *virtualConn
 
-	mu    sync.Mutex
-	flows map[netip.AddrPort]*flow
+	mu      sync.Mutex
+	flows   map[netip.AddrPort]*flow
+	unknown int // flows 里不属于 mio 的流的数量
 }
 
 func newDemux(sock *net.UDPConn, server *ecdh.PublicKey, dest *net.UDPAddr) *demux {
@@ -83,8 +90,13 @@ func (d *demux) handle(addr netip.AddrPort, pkt []byte) {
 	d.mu.Lock()
 	f := d.flows[addr]
 	if f == nil {
+		if d.unknown >= maxUnknownFlows {
+			d.mu.Unlock()
+			return
+		}
 		f = &flow{}
 		d.flows[addr] = f
+		d.unknown++
 	}
 	f.last = time.Now()
 
@@ -106,6 +118,7 @@ func (d *demux) handle(addr netip.AddrPort, pkt []byte) {
 	switch {
 	case status == initialRandom && d.replay.Check(random):
 		f.kind = flowMio
+		d.unknown--
 		queued := append(f.pending, pkt)
 		f.pending = nil
 		d.mu.Unlock()
@@ -143,7 +156,7 @@ func (d *demux) openRelay(client netip.AddrPort) *net.UDPConn {
 		return nil
 	}
 	go func() {
-		buf := make([]byte, 65535)
+		buf := make([]byte, relayBufferSize)
 		for {
 			n, err := relay.Read(buf)
 			if err != nil {
@@ -182,6 +195,9 @@ func (d *demux) cleanup(ctx context.Context) {
 			}
 			if f.relay != nil {
 				f.relay.Close()
+			}
+			if f.kind != flowMio {
+				d.unknown--
 			}
 			delete(d.flows, addr)
 		}

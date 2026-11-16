@@ -21,9 +21,9 @@ jobs:
             dickname: "linux-amd64v2-glibc"
           - tag: "GOAMD64=v1 CC=gcc"
             dickname: "linux-amd64v1-glibc"
-          - tag: "CGO_ENABLED=1 CC=gcc"
+          - tag: "CC=gcc"
             dickname: "linux-amd64-glibc"
-          - tag: "CGO_ENABLED=0 CC=musl-gcc"
+          - tag: "CC=musl-gcc"
             dickname: "linux-amd64-musl"
           - tag: "CGO_ENABLED=0"
             dickname: "linux-amd64"
@@ -55,7 +55,7 @@ jobs:
       - name: Build!
         shell: bash
         run: |
-          sudo apt-get install -y musl musl-dev musl-tools
+          sudo apt-get install musl musl-dev musl-tools
           ${{ matrix.tag }} go build -o ./mio-${{ matrix.dickname }} .
 
       - name: Release

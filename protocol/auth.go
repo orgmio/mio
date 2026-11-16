@@ -79,6 +79,10 @@ func authRecords(shared, clientRandom, serverRandom, share []byte) ([]byte, erro
 // VerifyAuth 是服务端认证：用服务端私钥与客户端 ClientHello 里的 X25519 key_share 算出共享密钥，
 // 能解开认证记录（header 为其 5 字节记录头）即认证通过。返回的共享密钥交给 Accept。
 func VerifyAuth(key *ecdh.PrivateKey, clientKeyShare, clientRandom, serverRandom, header, body []byte) (shared []byte, ok bool) {
+	// 长度不可能是认证记录的直接跳过，不为它做 X25519。
+	if len(body) < 16 || len(body) > maxAuthPlain+16 {
+		return nil, false
+	}
 	pub, err := ecdh.X25519().NewPublicKey(clientKeyShare)
 	if err != nil {
 		return nil, false

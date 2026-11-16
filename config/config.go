@@ -23,7 +23,7 @@ type Inbound struct {
 	Listen     string `toml:"listen"`
 	ListenPort int    `toml:"listen_port"`
 	Dest       string `toml:"dest"`
-	DestPort   int    `toml:"dest_port"`
+	DestPort   int    `toml:"dest_port"` // 选填，0 表示与 ListenPort 相同
 	PrivateKey string `toml:"private_key"`
 }
 
@@ -41,7 +41,7 @@ type Outbound struct {
 	Server          string `toml:"server"`
 	ServerPort      int    `toml:"server_port"`
 	Dest            string `toml:"dest"`
-	DestPort        int    `toml:"dest_port"`
+	DestPort        int    `toml:"dest_port"` // 选填，客户端不使用，只是允许两端的配置写法一致
 	PublicKey       string `toml:"public_key"`
 }
 
@@ -122,7 +122,7 @@ func (cfg *Config) validateClient() error {
 	if out.Dest == "" {
 		return errors.New("configuration must set [outbounds].dest")
 	}
-	if !validPort(out.DestPort) {
+	if out.DestPort != 0 && !validPort(out.DestPort) {
 		return errors.New("[outbounds].dest_port must be between 1 and 65535")
 	}
 	if out.PublicKey == "" {
@@ -147,8 +147,8 @@ func (cfg *Config) validateServer() error {
 	if in.Dest == "" {
 		return errors.New("configuration must set [inbounds].dest")
 	}
-	if !validPort(in.DestPort) {
-		return errors.New("[inbounds].dest_port must be between 1 and 65535")
+	if in.DestPort != 0 && !validPort(in.DestPort) {
+		return errors.New("[inbounds].dest_port must be between 1 and 65535 (or omitted to use listen_port)")
 	}
 	if in.PrivateKey == "" {
 		return errors.New("configuration must set [inbounds].private_key (run `mio keygen`)")
