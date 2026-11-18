@@ -126,7 +126,7 @@ frame = type(1) ‖ stream_id(4) ‖ payload_length(2) ‖ payload ‖ padding
 - **放弃**：一方不想再读写时发 reset 帧。对端收到后，这条流上的发送立即失败；已经到达的数据仍可读完，之后的读取得到结束（对端已先发过 close 帧）或错误。
   在还没读到对端 close 帧时关闭一条流，应当先发 close 帧（如果自己还没发过），再发 reset 帧。
 - **已结束的流**：收到 `stream_id` 属于已结束的流、或属于未知流的非 data 帧时，直接丢弃。
-- **流量控制**：每条流的每个方向各有一个接收窗口，初始为 4 MiB（4194304 字节），只统计 data 帧的负载。
+- **流量控制**：每条流的每个方向各有一个接收窗口，初始为 16 MiB（16777216 字节），只统计 data 帧的负载。
   发送方在窗口用完后必须停下，等待 window 帧；接收方在应用读走数据后用 window 帧把额度还给对端（实现中攒够半个窗口发一次）。
   对端发送的数据超出窗口属于协议错误，应关闭整条连接。连接本身没有窗口。
 - **连接关闭**：TCP 连接断开或出现协议错误时，其上所有的流一并失效。
@@ -136,7 +136,7 @@ frame = type(1) ‖ stream_id(4) ‖ payload_length(2) ‖ payload ‖ padding
 
 ### 填充
 
-默认填充策略（`protocol.DefaultPadding`）：
+填充策略：
 
 - ready 帧：0–1024 字节。
 - 每条流在每个方向上的前 8 个 data 帧：负载不足 900 字节的，补到整帧 900–1400 字节；其余随机加 0–255 字节。
@@ -207,13 +207,11 @@ import "github.com/orgmio/mio/protocol"
 | 接口                                                        | 作用                                                  |
 | ----------------------------------------------------------- | ----------------------------------------------------- |
 | `DialSession(ctx, Peer)` / `Session.Dial(ctx, target)`      | 客户端 TCP 路径：建立一条连接，在其上打开多个代理连接 |
-| `DialTCP(ctx, Peer, target)`                                | 同上，但每次调用新建一条连接，只承载一个代理连接      |
 | `Handshake(ctx, conn, Peer)`                                | 只做客户端握手，返回 `*Session`                       |
 | `VerifyAuth` / `Accept`                                     | 服务端认证与握手，`Accept` 返回 `*Session`            |
 | `GenerateKeyPair` / `ParsePrivateKey` / `ParsePublicKey`    | 密钥生成与解析                                        |
-| `Session` / `NewSession`                                    | 记录层与流（`Open` / `Accept`），可配合自己的握手使用 |
+| `Session`                                                   | 记录层与流（`Open` / `Accept`）                       |
 | `DeriveKeys`                                                | 密钥派生                                              |
-| `PaddingPolicy` / `DefaultPadding`                          | 填充策略，可通过 `Session.SetPaddingPolicy` 替换      |
 | `WriteRequest` / `ReadRequest` / `WriteReply` / `ReadReply` | 请求格式                                              |
 | `protocol/quicauth`                                         | 标记、重放缓存与认证（`ClientAuth` / `ServerAuth`）   |
 | `Version`                                                   | 引用方必须与对端完全一致                              |

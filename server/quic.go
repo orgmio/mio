@@ -28,21 +28,13 @@ func (s *Server) startQUIC(ctx context.Context) (func() error, error) {
 	if err != nil {
 		return nil, err
 	}
-	// quic-go 拿到的是分流后的 virtualConn，不会替我们调大内核缓冲，这里自己调；超过系统上限时内核会按上限截断。
-	sock.SetReadBuffer(udpBufferSize)
-	sock.SetWriteBuffer(udpBufferSize)
 	cert, err := selfSignedCert(s.cfg.Dest)
 	if err != nil {
 		sock.Close()
 		return nil, err
 	}
 
-	dest, err := net.ResolveUDPAddr("udp", net.JoinHostPort(s.cfg.Dest, strconv.Itoa(s.cfg.DestPort)))
-	if err != nil {
-		slog.Warn("inbound/mio: resolve dest udp, unmarked quic traffic will be dropped", "err", err)
-		dest = nil
-	}
-	d := newDemux(sock, s.key.PublicKey(), dest)
+	d := newDemux(sock, s.key.PublicKey(), net.JoinHostPort(s.cfg.Dest, strconv.Itoa(s.cfg.DestPort)))
 	go d.run(ctx)
 
 	transport := &quic.Transport{Conn: d.virtual}

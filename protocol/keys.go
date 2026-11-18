@@ -57,3 +57,12 @@ func nonce(aead cipher.AEAD, seq uint64) []byte {
 	binary.BigEndian.PutUint64(n[len(n)-8:], seq)
 	return n
 }
+
+// gcmNonceSize 是 AES-GCM 的标准 nonce 长度。
+const gcmNonceSize = 12
+
+// seqNonce 把记录序号写进 n 的最后 8 字节并返回它，供收发热路径复用，不分配内存。
+func seqNonce(n *[gcmNonceSize]byte, seq uint64) []byte {
+	binary.BigEndian.PutUint64(n[gcmNonceSize-8:], seq)
+	return n[:]
+}

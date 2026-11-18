@@ -38,14 +38,17 @@ type Session struct {
 	client bool
 
 	// 发送方向：writeMu 保证记录按序号依次写出。
-	writeMu sync.Mutex
-	send    cipher.AEAD
-	sendSeq uint64
+	writeMu   sync.Mutex
+	send      cipher.AEAD
+	sendSeq   uint64
+	sendNonce [gcmNonceSize]byte
+	writeBuf  []byte // 整条记录在这里拼好并原地加密，跨帧复用
 
 	// 接收方向：握手阶段由握手协程使用，之后只由 readLoop 使用。
-	recv    cipher.AEAD
-	recvSeq uint64
-	readBuf []byte
+	recv      cipher.AEAD
+	recvSeq   uint64
+	recvNonce [gcmNonceSize]byte
+	readBuf   []byte
 	// lastRecv 是最近一次收到对端记录的时间（UnixNano），用来判断连接是否已经悄悄断了。
 	lastRecv atomic.Int64
 
@@ -53,25 +56,16 @@ type Session struct {
 	openMu sync.Mutex
 
 	mu          sync.Mutex
-	policy      PaddingPolicy
 	streams     map[uint32]*stream
 	unopened    int    // 客户端已 Open、还没发过数据（因而还没有编号）的流的数量
 	nextID      uint32 // 客户端下一条流的编号
 	lastPeerID  uint32 // 服务端见过的最大流编号
 	err         error  // 非 nil 表示会话已关闭
 	idleTimeout time.Duration
-	idleEpoch   uint64 // 每次有流打开时加 1，让过期的空闲定时器失效
+	idleTimer   *time.Timer // 整个会话只有这一个空闲定时器，每次变空闲时重置
 
 	accept chan *stream
 	done   chan struct{}
-}
-
-// NewSession 用已派生好的密钥在 conn 上建立会话并开始收发；reader 为 nil 时从 conn 直接读。
-// 通常由 Handshake（客户端）或 Accept（服务端）创建，自行完成握手时也可以直接使用。
-func NewSession(conn net.Conn, reader *bufio.Reader, send, recv cipher.AEAD, isClient bool) *Session {
-	s := newSession(conn, reader, send, recv, isClient)
-	s.start()
-	return s
 }
 
 func newSession(conn net.Conn, reader *bufio.Reader, send, recv cipher.AEAD, isClient bool) *Session {
@@ -84,7 +78,6 @@ func newSession(conn net.Conn, reader *bufio.Reader, send, recv cipher.AEAD, isC
 		client:  isClient,
 		send:    send,
 		recv:    recv,
-		policy:  DefaultPadding{},
 		streams: make(map[uint32]*stream),
 		nextID:  1,
 		accept:  make(chan *stream, acceptBacklog),
@@ -111,7 +104,6 @@ func (s *Session) Open() (net.Conn, error) {
 		return nil, s.err
 	}
 	s.unopened++
-	s.idleEpoch++
 	return newStream(s, 0), nil
 }
 
@@ -144,39 +136,37 @@ func (s *Session) NumStreams() int {
 func (s *Session) LocalAddr() net.Addr  { return s.conn.LocalAddr() }
 func (s *Session) RemoteAddr() net.Addr { return s.conn.RemoteAddr() }
 
-// SetPaddingPolicy 替换填充策略；p 为 nil 时恢复 DefaultPadding。
-func (s *Session) SetPaddingPolicy(p PaddingPolicy) {
-	if p == nil {
-		p = DefaultPadding{}
-	}
-	s.mu.Lock()
-	s.policy = p
-	s.mu.Unlock()
-}
-
 // SetIdleTimeout 让会话在没有任何流的状态持续 d 之后自动关闭；d 为 0 时不自动关闭（默认）。
 func (s *Session) SetIdleTimeout(d time.Duration) {
 	s.mu.Lock()
 	s.idleTimeout = d
-	s.idleEpoch++
+	if d <= 0 && s.idleTimer != nil {
+		s.idleTimer.Stop()
+	}
 	s.armIdleTimer()
 	s.mu.Unlock()
 }
 
-// armIdleTimer 在没有流时启动空闲定时器，调用时需持有 s.mu。
+// armIdleTimer 在没有流时（重新）开始空闲计时，调用时需持有 s.mu。
+// 有流打开时不必停掉定时器：到期时会再检查一次，那时有流就什么都不做；流全部关闭时会重新从头计时。
 func (s *Session) armIdleTimer() {
 	if s.idleTimeout <= 0 || len(s.streams)+s.unopened > 0 || s.err != nil {
 		return
 	}
-	epoch := s.idleEpoch
-	time.AfterFunc(s.idleTimeout, func() {
-		s.mu.Lock()
-		idle := s.idleEpoch == epoch && len(s.streams)+s.unopened == 0
-		s.mu.Unlock()
-		if idle {
-			s.Close()
-		}
-	})
+	if s.idleTimer == nil {
+		s.idleTimer = time.AfterFunc(s.idleTimeout, s.idleExpired)
+		return
+	}
+	s.idleTimer.Reset(s.idleTimeout)
+}
+
+func (s *Session) idleExpired() {
+	s.mu.Lock()
+	idle := s.idleTimeout > 0 && len(s.streams)+s.unopened == 0
+	s.mu.Unlock()
+	if idle {
+		s.Close()
+	}
 }
 
 // removeStream 在流关闭时把它从会话里去掉；id 为 0 表示它还没有编号。
@@ -215,44 +205,38 @@ func (s *Session) closeWithError(err error) {
 	s.conn.Close()
 }
 
-// paddingLength 按填充策略算出一个帧的填充长度。
+// paddingLength 算出一个帧的填充长度。
 func (s *Session) paddingLength(typ byte, payloadLength int, dataFrames uint64) int {
-	s.mu.Lock()
-	policy := s.policy
-	s.mu.Unlock()
-	limit := MaxFramePayload - payloadLength
-	length, err := policy.PaddingLength(typ, payloadLength, dataFrames, limit)
-	if err != nil {
-		return 0
-	}
-	return length
+	return framePadding(typ, payloadLength, dataFrames, MaxFramePayload-payloadLength)
 }
 
 // writeFrame 把一个帧封装成一条记录写出，padLength 超出记录容量的部分会被截掉。写失败时会话随之关闭。
+// 记录在会话自己的缓冲里拼好后原地加密，不分配内存。填充为全零：它在密文里，外面看不到内容，只看得到长度。
 func (s *Session) writeFrame(typ byte, id uint32, payload []byte, padLength int) error {
 	if len(payload) > MaxFramePayload {
 		return errors.New("frame payload too large")
 	}
 	padLength = max(0, min(padLength, MaxFramePayload-len(payload)))
-	pad, err := padding.RandomBytes(padLength)
-	if err != nil {
-		return err
+	plainSize := FrameHeaderSize + len(payload) + padLength
+
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	overhead := s.send.Overhead()
+	recordSize := tlsrecord.HeaderSize + plainSize + overhead
+	if cap(s.writeBuf) < recordSize {
+		s.writeBuf = make([]byte, tlsrecord.HeaderSize+FrameHeaderSize+MaxFramePayload+overhead)
 	}
-	plain := make([]byte, FrameHeaderSize+len(payload)+len(pad))
+	record := s.writeBuf[:recordSize]
+	header := record[:tlsrecord.HeaderSize]
+	header[0], header[1], header[2] = tlsrecord.TypeAppData, 0x03, 0x03
+	binary.BigEndian.PutUint16(header[3:], uint16(plainSize+overhead))
+	plain := record[tlsrecord.HeaderSize : tlsrecord.HeaderSize+plainSize]
 	plain[0] = typ
 	binary.BigEndian.PutUint32(plain[1:5], id)
 	binary.BigEndian.PutUint16(plain[5:FrameHeaderSize], uint16(len(payload)))
 	copy(plain[FrameHeaderSize:], payload)
-	copy(plain[FrameHeaderSize+len(payload):], pad)
-
-	s.writeMu.Lock()
-	defer s.writeMu.Unlock()
-	var header [tlsrecord.HeaderSize]byte
-	header[0], header[1], header[2] = tlsrecord.TypeAppData, 0x03, 0x03
-	binary.BigEndian.PutUint16(header[3:], uint16(len(plain)+s.send.Overhead()))
-	record := make([]byte, 0, tlsrecord.HeaderSize+len(plain)+s.send.Overhead())
-	record = append(record, header[:]...)
-	record = s.send.Seal(record, nonce(s.send, s.sendSeq), plain, header[:])
+	clear(plain[FrameHeaderSize+len(payload):])
+	s.send.Seal(plain[:0], seqNonce(&s.sendNonce, s.sendSeq), plain, header)
 	s.sendSeq++
 	if err := writeAll(s.conn, record); err != nil {
 		s.closeWithError(err)
@@ -294,7 +278,7 @@ func (s *Session) readFrame(skipForeign bool) (typ byte, id uint32, payload []by
 		if _, err := io.ReadFull(s.reader, body); err != nil {
 			return 0, 0, nil, err
 		}
-		plain, err := s.recv.Open(body[:0], nonce(s.recv, s.recvSeq), body, header[:])
+		plain, err := s.recv.Open(body[:0], seqNonce(&s.recvNonce, s.recvSeq), body, header[:])
 		if err != nil {
 			if skipForeign {
 				continue
@@ -377,7 +361,6 @@ func (s *Session) lookup(id uint32, open bool) *stream {
 	select {
 	case s.accept <- st:
 		s.streams[id] = st
-		s.idleEpoch++
 		return st
 	default:
 		// 积压的流太多，拒绝这一条。不能在 readLoop 里等待写操作，所以另起协程发送。

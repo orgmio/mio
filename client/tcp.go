@@ -25,7 +25,13 @@ type tcpPool struct {
 
 	mu       sync.Mutex
 	sessions []*protocol.Session
-	dialing  chan struct{} // 有协程正在新建连接时非 nil，建完后关闭
+	dialing  *dialAttempt // 有协程正在新建连接时非 nil
+}
+
+// dialAttempt 是一次正在进行的新建连接，done 关闭后 err 即为结果。
+type dialAttempt struct {
+	done chan struct{}
+	err  error
 }
 
 func newTCPPool(peer protocol.Peer) *tcpPool {
@@ -54,7 +60,8 @@ func (p *tcpPool) dial(ctx context.Context, target string) (conn net.Conn, err e
 	return nil, err
 }
 
-// session 返回一条还能再开流的连接，没有就新建一条。同一时刻只有一个协程在新建，其余的等它建好后复用。
+// session 返回一条还能再开流的连接，没有就新建一条。同一时刻只有一个协程在新建，其余的等它建好后复用；
+// 新建失败时等待者直接拿到同一个错误，不会排着队一个接一个地重试。
 func (p *tcpPool) session(ctx context.Context) (*protocol.Session, error) {
 	for {
 		p.mu.Lock()
@@ -74,28 +81,34 @@ func (p *tcpPool) session(ctx context.Context) (*protocol.Session, error) {
 				return session, nil
 			}
 		}
-		if wait := p.dialing; wait != nil {
+		if attempt := p.dialing; attempt != nil {
 			p.mu.Unlock()
 			select {
-			case <-wait:
+			case <-attempt.done:
+				if attempt.err != nil {
+					return nil, attempt.err
+				}
 				continue
 			case <-ctx.Done():
 				return nil, ctx.Err()
 			}
 		}
-		done := make(chan struct{})
-		p.dialing = done
+		attempt := &dialAttempt{done: make(chan struct{})}
+		p.dialing = attempt
 		p.mu.Unlock()
 
-		session, err := protocol.DialSession(ctx, p.peer)
+		// 不用调用方的 ctx：等待者会共享这次结果，不能因为发起者被取消就让大家一起失败。
+		// DialSession 自带握手时限，不会一直卡住。
+		session, err := protocol.DialSession(context.WithoutCancel(ctx), p.peer)
 		p.mu.Lock()
 		p.dialing = nil
 		if err == nil {
 			session.SetIdleTimeout(minSessionIdle + rand.N(maxSessionIdle-minSessionIdle))
 			p.sessions = append(p.sessions, session)
 		}
+		attempt.err = err
 		p.mu.Unlock()
-		close(done)
+		close(attempt.done)
 		return session, err
 	}
 }

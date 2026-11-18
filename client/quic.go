@@ -164,8 +164,6 @@ func (s *quicSession) dialStream(ctx context.Context, target string) (net.Conn, 
 	return conn, nil
 }
 
-func (s *quicSession) done() <-chan struct{} { return s.conn.Context().Done() }
-
 func (s *quicSession) Close() {
 	s.conn.CloseWithError(0, "")
 	s.transport.Close()

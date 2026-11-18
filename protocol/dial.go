@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"net"
 	"os"
 	"strconv"
@@ -12,13 +11,18 @@ import (
 )
 
 const (
-	dialTimeout  = 5 * time.Second
-	replyTimeout = 10 * time.Second
+	dialTimeout = 5 * time.Second
+	// handshakeTimeout 是建立 TCP 连接加上 TLS 握手的总时限。调用方的 ctx 可能永远不会结束，
+	// 没有它的话，对端接受 TCP 却不回 TLS 时握手会一直卡住。
+	handshakeTimeout = 10 * time.Second
+	replyTimeout     = 10 * time.Second
 )
 
 // DialSession 连接 peer 并完成握手与认证，返回的会话上可以用 Dial 打开多条到不同目标的连接。
 func DialSession(ctx context.Context, peer Peer) (*Session, error) {
 	address := net.JoinHostPort(peer.Server, strconv.Itoa(peer.ServerPort))
+	ctx, cancel := context.WithTimeout(ctx, handshakeTimeout)
+	defer cancel()
 	dialer := net.Dialer{Timeout: dialTimeout}
 
 	conn, err := dialer.DialContext(ctx, "tcp", address)
@@ -65,39 +69,4 @@ func (s *Session) Dial(ctx context.Context, target string) (net.Conn, error) {
 	}
 	conn.SetReadDeadline(time.Time{})
 	return conn, nil
-}
-
-// DialTCP 是客户端的 TCP 路径：连接 peer 完成握手与认证，请求服务端连接 target（host:port），返回的连接上的数据已由 mio 加密。
-// 每次调用都会新建一条到 peer 的连接；需要在一条连接上复用多个目标时，改用 DialSession 和 Session.Dial。
-func DialTCP(ctx context.Context, peer Peer, target string) (net.Conn, error) {
-	session, err := DialSession(ctx, peer)
-	if err != nil {
-		return nil, err
-	}
-	conn, err := session.Dial(ctx, target)
-	if err != nil {
-		session.Close()
-		return nil, err
-	}
-	return &sessionConn{Conn: conn, session: session}, nil
-}
-
-// sessionConn 是独占一个会话的流，关闭时连同会话一起关闭。
-type sessionConn struct {
-	net.Conn
-	session *Session
-}
-
-func (c *sessionConn) ReadFrom(r io.Reader) (int64, error) {
-	return c.Conn.(*stream).ReadFrom(r)
-}
-
-func (c *sessionConn) CloseWrite() error {
-	return c.Conn.(*stream).CloseWrite()
-}
-
-func (c *sessionConn) Close() error {
-	err := c.Conn.Close()
-	c.session.Close()
-	return err
 }

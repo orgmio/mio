@@ -83,11 +83,6 @@ func (c *ReplayCache) Check(random []byte) bool {
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	for key, expire := range c.seen {
-		if now.After(expire) {
-			delete(c.seen, key)
-		}
-	}
 	var key [markerNonceSize]byte
 	copy(key[:], nonce)
 	if _, dup := c.seen[key]; dup {
@@ -95,6 +90,17 @@ func (c *ReplayCache) Check(random []byte) bool {
 	}
 	c.seen[key] = now.Add(markerRetention)
 	return true
+}
+
+// Sweep 清掉 now 之前已过期的记录。由调用方定期调用，不放在 Check 里，免得每次校验都扫一遍整张表。
+func (c *ReplayCache) Sweep(now time.Time) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for key, expire := range c.seen {
+		if now.After(expire) {
+			delete(c.seen, key)
+		}
+	}
 }
 
 // NewRand 返回给 tls.Config.Rand 用的随机源：TLS 库第一次读 32 字节（即 ClientHello.random）时得到 marker。

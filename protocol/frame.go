@@ -25,22 +25,12 @@ const (
 	MaxFramePayload = maxRecordBody - 16 - FrameHeaderSize
 
 	// StreamWindow 是每条流、每个方向的初始接收窗口：未被 window 帧追加额度前，对端最多发送这么多字节的 data 负载。
-	StreamWindow = 4 << 20
+	StreamWindow = 16 << 20
 )
 
-// PaddingPolicy 决定每个帧追加多少字节的随机填充。
-type PaddingPolicy interface {
-	// PaddingLength 返回本帧的填充长度，frameType 为帧类型，payloadLen 为负载长度，
-	// dataFrames 为这条流此前已发出的 data 帧数，limit 为本帧能容纳的最大填充长度。
-	// 返回值超出 [0, limit] 时会被截断。
-	PaddingLength(frameType byte, payloadLen int, dataFrames uint64, limit int) (int, error)
-}
-
-// DefaultPadding 是 mio 默认的填充策略：
+// framePadding 是每个帧的填充长度，limit 为本帧能容纳的最大填充长度：
 // ready 帧填充 0–1024 字节；每条流的前 8 个 data 帧中，负载不足 900 字节的补到 900–1400 字节，其余填充 0–255 字节；之后不再填充。
-type DefaultPadding struct{}
-
-func (DefaultPadding) PaddingLength(frameType byte, payloadLen int, dataFrames uint64, limit int) (int, error) {
+func framePadding(frameType byte, payloadLen int, dataFrames uint64, limit int) int {
 	minimum, maximum := 0, 0
 	switch {
 	case frameType == FrameReady:
@@ -51,8 +41,12 @@ func (DefaultPadding) PaddingLength(frameType byte, payloadLen int, dataFrames u
 	case frameType == FrameData && dataFrames < 8:
 		maximum = 255
 	default:
-		return 0, nil
+		return 0
 	}
-	minimum, maximum = min(minimum, limit), min(maximum, limit)
-	return padding.RandomInt(minimum, maximum)
+	minimum, maximum = max(0, min(minimum, limit)), max(0, min(maximum, limit))
+	length, err := padding.RandomInt(minimum, maximum)
+	if err != nil {
+		return 0
+	}
+	return length
 }

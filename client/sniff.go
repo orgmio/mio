@@ -2,6 +2,7 @@ package client
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"io"
 	"log/slog"
@@ -22,8 +23,11 @@ type Sniff struct {
 }
 
 func (c *Sniff) Write(p []byte) (int, error) {
-	// 只看第一段数据，之后的写入不再解析。
+	// 只看第一段数据，之后的写入不再解析。解析要跑一遍 TLS 握手，只在会输出 Debug 日志时做。
 	c.once.Do(func() {
+		if !slog.Default().Enabled(context.Background(), slog.LevelDebug) {
+			return
+		}
 		if sni := parseSNI(p); sni != "" && sni != c.host {
 			slog.Debug("inbound/socks: sniffed protocol: tls, domain: " + sni)
 		}
