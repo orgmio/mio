@@ -8,7 +8,7 @@ require (
 	github.com/refraction-networking/utls v1.8.2
 	github.com/spf13/cobra v1.10.2
 	github.com/things-go/go-socks5 v0.1.4
-	golang.org/x/exp v0.0.0-20261117202309-7a49493bfd90
+	golang.org/x/exp v0.0.0-20261120182113-8801fbdfac81
 	golang.org/x/net v0.63.0
 )
 
@@ -17,7 +17,7 @@ replace github.com/apernet/quic-go => github.com/HyNetworks/quic-go v0.65.1-0.20
 require (
 	github.com/andybalholm/brotli v1.3.0 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
-	github.com/klauspost/compress v1.20.4 // indirect
+	github.com/klauspost/compress v1.20.5 // indirect
 	github.com/spf13/pflag v1.1.0 // indirect
 	golang.org/x/crypto v0.59.0 // indirect
 	golang.org/x/sys v0.50.0 // indirect

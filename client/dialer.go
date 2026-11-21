@@ -44,6 +44,7 @@ type Dialer struct {
 	session     *quicSession
 	selected    transportChoice
 	probing     bool
+	revision    uint64 // invalidates background probe results after a newer routing decision
 	nextProbe   time.Time
 	tcpLatency  time.Duration
 	quicLatency time.Duration
@@ -101,6 +102,7 @@ func (d *Dialer) Dial(ctx context.Context, target string) (net.Conn, error) {
 	}
 	if d.selected == transportUnknown || !time.Now().Before(d.nextProbe) {
 		d.probing = true
+		d.revision++
 		d.mu.Unlock()
 		return d.probe(ctx, target)
 	}
@@ -120,7 +122,7 @@ func (d *Dialer) dialSelected(ctx context.Context, target string, selected trans
 		if session.conn.Context().Err() != nil {
 			d.drop(session)
 		}
-		d.selectTransport(transportTCP)
+		d.selectTransport(transportTCP, nil)
 		slog.Debug("outbound/mio: h3 stream failed, falling back to tcp", "err", err)
 	}
 
@@ -140,9 +142,10 @@ func (d *Dialer) dialSelected(ctx context.Context, target string, selected trans
 	quicConn, quicErr := session.dialStream(ctx, target)
 	if quicErr == nil {
 		if owned {
-			d.installSession(session)
+			d.selectTransport(transportQUIC, session)
+		} else {
+			d.selectTransport(transportQUIC, nil)
 		}
-		d.selectTransport(transportQUIC)
 		return quicConn, nil
 	}
 	if owned {
@@ -158,6 +161,7 @@ func (d *Dialer) drop(session *quicSession) {
 	d.mu.Lock()
 	if d.session == session {
 		d.session = nil
+		d.revision++
 	}
 	d.mu.Unlock()
 	session.Close()
@@ -175,8 +179,8 @@ func (d *Dialer) probe(ctx context.Context, target string) (net.Conn, error) {
 		select {
 		case <-ctx.Done():
 			cancel()
-			go d.finishProbeLater(results, completed, transportUnknown, cancel)
-			d.endProbe(transportUnknown)
+			d.endProbe(transportUnknown, nil)
+			go d.finishProbeLater(results, completed, transportUnknown, 0, cancel)
 			return nil, ctx.Err()
 		case result := <-results:
 			completed = append(completed, result)
@@ -186,16 +190,13 @@ func (d *Dialer) probe(ctx context.Context, target string) (net.Conn, error) {
 				}
 				continue
 			}
-			d.endProbe(result.transport)
-			if result.transport == transportQUIC {
-				d.installSession(result.session)
-			}
-			go d.finishProbeLater(results, completed, result.transport, cancel)
+			revision := d.endProbe(result.transport, result.session)
+			go d.finishProbeLater(results, completed, result.transport, revision, cancel)
 			return result.conn, nil
 		}
 	}
 	cancel()
-	d.endProbe(transportTCP)
+	d.endProbe(transportTCP, nil)
 	return nil, firstError
 }
 
@@ -226,7 +227,7 @@ func (d *Dialer) dialQUICResult(ctx context.Context, target string) dialResult {
 	return dialResult{transport: transportQUIC, conn: conn, session: session, owned: owned, elapsed: time.Since(started), err: err}
 }
 
-func (d *Dialer) finishProbeLater(results <-chan dialResult, completed []dialResult, winner transportChoice, cancel context.CancelFunc) {
+func (d *Dialer) finishProbeLater(results <-chan dialResult, completed []dialResult, winner transportChoice, revision uint64, cancel context.CancelFunc) {
 	var samples [3]dialResult
 	for _, result := range completed {
 		samples[result.transport] = result
@@ -249,6 +250,25 @@ func (d *Dialer) finishProbeLater(results <-chan dialResult, completed []dialRes
 		return
 	}
 	d.mu.Lock()
+	var retained *quicSession
+	if d.revision == revision {
+		retained = d.applyProbeSamples(samples, winner)
+	}
+	d.mu.Unlock()
+
+	for _, result := range samples {
+		if result.err != nil || result.conn == nil || result.transport == winner {
+			continue
+		}
+		result.conn.Close()
+		if result.owned && result.session != retained {
+			result.session.Close()
+		}
+	}
+}
+
+// applyProbeSamples runs with d.mu held and returns the session kept for reuse.
+func (d *Dialer) applyProbeSamples(samples [3]dialResult, winner transportChoice) *quicSession {
 	if tcp := samples[transportTCP]; tcp.err == nil {
 		d.tcpLatency = smoothLatency(d.tcpLatency, tcp.elapsed)
 	}
@@ -267,40 +287,32 @@ func (d *Dialer) finishProbeLater(results <-chan dialResult, completed []dialRes
 		d.session = samples[transportQUIC].session
 	}
 	d.selected = nextSelected
-	d.mu.Unlock()
-
-	for _, result := range samples {
-		if result.err != nil || result.conn == nil || result.transport == winner {
-			continue
-		}
-		result.conn.Close()
-		if result.owned && result.transport != nextSelected {
-			result.session.Close()
-		}
-	}
+	return d.session
 }
 
-func (d *Dialer) endProbe(selected transportChoice) {
+func (d *Dialer) endProbe(selected transportChoice, session *quicSession) uint64 {
 	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.probing = false
+	d.setTransportLocked(selected, session)
+	return d.revision
+}
+
+func (d *Dialer) selectTransport(selected transportChoice, session *quicSession) {
+	d.mu.Lock()
+	d.setTransportLocked(selected, session)
+	d.mu.Unlock()
+}
+
+func (d *Dialer) setTransportLocked(selected transportChoice, session *quicSession) {
 	if selected != transportUnknown {
 		d.selected = selected
 	}
-	d.probing = false
+	if session != nil {
+		d.session = session
+	}
+	d.revision++
 	d.nextProbe = time.Now().Add(minProbeInterval + rand.N(maxProbeInterval-minProbeInterval))
-	d.mu.Unlock()
-}
-
-func (d *Dialer) selectTransport(selected transportChoice) {
-	d.mu.Lock()
-	d.selected = selected
-	d.nextProbe = time.Now().Add(minProbeInterval + rand.N(maxProbeInterval-minProbeInterval))
-	d.mu.Unlock()
-}
-
-func (d *Dialer) installSession(session *quicSession) {
-	d.mu.Lock()
-	d.session = session
-	d.mu.Unlock()
 }
 
 func smoothLatency(previous, sample time.Duration) time.Duration {
