@@ -8,7 +8,7 @@ require (
 	github.com/refraction-networking/utls v1.8.2
 	github.com/spf13/cobra v1.10.2
 	github.com/things-go/go-socks5 v0.1.4
-	golang.org/x/exp v0.0.0-20261120182113-8801fbdfac81
+	golang.org/x/exp v0.0.0-20261121134650-e1094eeca1b5
 	golang.org/x/net v0.63.0
 )
 
