@@ -29,7 +29,12 @@ func DialSession(ctx context.Context, peer Peer) (*Session, error) {
 	if err != nil {
 		return nil, fmt.Errorf("connect to peer %s: %w", address, err)
 	}
+	stop := context.AfterFunc(ctx, func() { conn.Close() })
 	session, err := Handshake(ctx, conn, peer)
+	if !stop() || ctx.Err() != nil {
+		conn.Close()
+		return nil, ctx.Err()
+	}
 	if err != nil {
 		conn.Close()
 		return nil, fmt.Errorf("peer %s: %w", address, err)
@@ -45,7 +50,10 @@ func (s *Session) Dial(ctx context.Context, target string) (net.Conn, error) {
 		return nil, fmt.Errorf("peer %s: %w", address, err)
 	}
 	// ctx 结束时关闭这条流，让等待中的读写立刻返回。
-	stop := context.AfterFunc(ctx, func() { conn.Close() })
+	stop := context.AfterFunc(ctx, func() {
+		conn.SetWriteDeadline(time.Now())
+		conn.Close()
+	})
 	defer stop()
 
 	conn.(*stream).SetNextPadding(16, 512)
@@ -66,6 +74,10 @@ func (s *Session) Dial(ctx context.Context, target string) (net.Conn, error) {
 			s.closeWithError(errors.New("no response from peer"))
 		}
 		return nil, fmt.Errorf("peer %s: %w", address, err)
+	}
+	if !stop() || ctx.Err() != nil {
+		conn.Close()
+		return nil, ctx.Err()
 	}
 	conn.SetReadDeadline(time.Time{})
 	return conn, nil

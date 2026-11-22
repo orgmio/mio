@@ -222,7 +222,5 @@ import "github.com/orgmio/mio/protocol"
 但hysteria2社区将他们的github组织名改了，而包名没改，所以这里做一个重定向。
 
 ```text
-replace github.com/apernet/quic-go => github.com/HyNetworks/quic-go v0.65.1-0.20261109005002-2895f039137a
+replace github.com/apernet/quic-go => github.com/HyNetworks/quic-go 
 ```
-
-这是因为 Go 只认主模块里的 `replace`，依赖里写的 `replace` 不会生效。

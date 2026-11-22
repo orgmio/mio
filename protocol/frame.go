@@ -1,6 +1,12 @@
 package protocol
 
 import (
+	"encoding/binary"
+	"errors"
+	"io"
+	"time"
+
+	"github.com/orgmio/mio/internal/tlsrecord"
 	"github.com/orgmio/mio/protocol/padding"
 )
 
@@ -49,4 +55,123 @@ func framePadding(frameType byte, payloadLen int, dataFrames uint64, limit int) 
 		return 0
 	}
 	return length
+}
+
+// paddingLength 算出一个帧的填充长度。
+func (s *Session) paddingLength(typ byte, payloadLength int, dataFrames uint64) int {
+	return framePadding(typ, payloadLength, dataFrames, MaxFramePayload-payloadLength)
+}
+
+// writeFrame 把一个帧封装成一条记录写出，padLength 超出记录容量的部分会被截掉。写失败时会话随之关闭。
+// 记录在会话自己的缓冲里拼好后原地加密，不分配内存。填充为全零：它在密文里，外面看不到内容，只看得到长度。
+func (s *Session) writeFrame(typ byte, id uint32, payload []byte, padLength int) error {
+	select {
+	case s.writeMu <- struct{}{}:
+		defer func() { <-s.writeMu }()
+	case <-s.done:
+		return s.closeError()
+	}
+	if err := s.conn.SetWriteDeadline(time.Now().Add(sessionWriteTimeout)); err != nil {
+		return err
+	}
+	return s.writeFrameLocked(typ, id, payload, padLength)
+}
+
+const sessionWriteTimeout = 10 * time.Second
+
+// writeFrameLocked requires the session write slot and an installed socket deadline.
+func (s *Session) writeFrameLocked(typ byte, id uint32, payload []byte, padLength int) error {
+	if len(payload) > MaxFramePayload {
+		return errors.New("frame payload too large")
+	}
+	padLength = max(0, min(padLength, MaxFramePayload-len(payload)))
+	plainSize := FrameHeaderSize + len(payload) + padLength
+
+	overhead := s.send.Overhead()
+	recordSize := tlsrecord.HeaderSize + plainSize + overhead
+	if cap(s.writeBuf) < recordSize {
+		s.writeBuf = make([]byte, tlsrecord.HeaderSize+FrameHeaderSize+MaxFramePayload+overhead)
+	}
+	record := s.writeBuf[:recordSize]
+	header := record[:tlsrecord.HeaderSize]
+	header[0], header[1], header[2] = tlsrecord.TypeAppData, 0x03, 0x03
+	binary.BigEndian.PutUint16(header[3:], uint16(plainSize+overhead))
+	plain := record[tlsrecord.HeaderSize : tlsrecord.HeaderSize+plainSize]
+	plain[0] = typ
+	binary.BigEndian.PutUint32(plain[1:5], id)
+	binary.BigEndian.PutUint16(plain[5:FrameHeaderSize], uint16(len(payload)))
+	copy(plain[FrameHeaderSize:], payload)
+	clear(plain[FrameHeaderSize+len(payload):])
+	s.send.Seal(plain[:0], seqNonce(&s.sendNonce, s.sendSeq), plain, header)
+	s.sendSeq++
+	if err := writeAll(s.conn, record); err != nil {
+		s.closeWithError(err)
+		return err
+	}
+	return nil
+}
+
+func writeAll(w io.Writer, p []byte) error {
+	for len(p) > 0 {
+		n, err := w.Write(p)
+		if err != nil {
+			return err
+		}
+		if n == 0 {
+			return io.ErrShortWrite
+		}
+		p = p[n:]
+	}
+	return nil
+}
+
+// readFrame 读取并原地解密一条记录；返回的负载在下一次 readFrame 前有效。
+// skipForeign 为 true 时跳过解不开的记录（握手期真站发来的记录）。
+func (s *Session) readFrame(skipForeign bool) (typ byte, id uint32, payload []byte, err error) {
+	var header [tlsrecord.HeaderSize]byte
+	for {
+		if _, err := io.ReadFull(s.reader, header[:]); err != nil {
+			return 0, 0, nil, err
+		}
+		if !tlsrecord.ValidHeader(header[:]) {
+			return 0, 0, nil, errors.New("invalid record header")
+		}
+		length := int(binary.BigEndian.Uint16(header[3:]))
+		if cap(s.readBuf) < length {
+			s.readBuf = make([]byte, tlsrecord.MaxBody)
+		}
+		body := s.readBuf[:length]
+		if _, err := io.ReadFull(s.reader, body); err != nil {
+			return 0, 0, nil, err
+		}
+		plain, err := s.recv.Open(body[:0], seqNonce(&s.recvNonce, s.recvSeq), body, header[:])
+		if err != nil {
+			if skipForeign {
+				continue
+			}
+			return 0, 0, nil, errors.New("decrypt record failed")
+		}
+		s.recvSeq++
+		s.lastRecv.Store(time.Now().UnixNano())
+		if len(plain) < FrameHeaderSize {
+			return 0, 0, nil, errors.New("short frame")
+		}
+		payloadLength := int(binary.BigEndian.Uint16(plain[5:FrameHeaderSize]))
+		if payloadLength > len(plain)-FrameHeaderSize {
+			return 0, 0, nil, errors.New("invalid frame payload length")
+		}
+		return plain[0], binary.BigEndian.Uint32(plain[1:5]), plain[FrameHeaderSize : FrameHeaderSize+payloadLength], nil
+	}
+}
+
+// waitReady 等待服务端的就绪帧并返回其服务端密钥份额，之前收到的真站记录会被丢弃。
+func (s *Session) waitReady() ([]byte, error) {
+	typ, _, payload, err := s.readFrame(true)
+	if err != nil {
+		return nil, err
+	}
+	if typ != FrameReady {
+		return nil, errors.New("unexpected frame before ready")
+	}
+	return append([]byte(nil), payload...), nil
 }

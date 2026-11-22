@@ -13,6 +13,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          - tag: "CGO_ENABLED=0"
+            dickname: "linux-amd64"
           - tag: "GOAMD64=v4 CC=gcc"
             dickname: "linux-amd64v4-glibc"
           - tag: "GOAMD64=v3 CC=gcc"
@@ -25,8 +27,6 @@ jobs:
             dickname: "linux-amd64-glibc"
           - tag: "CC=musl-gcc"
             dickname: "linux-amd64-musl"
-          - tag: "CGO_ENABLED=0"
-            dickname: "linux-amd64"
           - tag: "CGO_ENABLED=0 GOARCH=arm64 GOARM64=v9.2"
             dickname: "linux-arm64v9.2"
           - tag: "CGO_ENABLED=0 GOARCH=arm64"

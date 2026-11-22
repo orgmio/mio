@@ -15,14 +15,14 @@ import (
 	"github.com/orgmio/mio/protocol"
 )
 
-// Sniff 从连接写出的第一段数据里取出 TLS 的 SNI，与请求的域名不同时记一条日志。
-type Sniff struct {
+// sniLogConn 从连接写出的第一段数据里取出 TLS 的 SNI，与请求的域名不同时记一条日志。
+type sniLogConn struct {
 	net.Conn
 	once sync.Once
 	host string
 }
 
-func (c *Sniff) Write(p []byte) (int, error) {
+func (c *sniLogConn) Write(p []byte) (int, error) {
 	// 只看第一段数据，之后的写入不再解析。解析要跑一遍 TLS 握手，只在会输出 Debug 日志时做。
 	c.once.Do(func() {
 		if !slog.Default().Enabled(context.Background(), slog.LevelDebug) {
@@ -36,7 +36,7 @@ func (c *Sniff) Write(p []byte) (int, error) {
 }
 
 // ReadFrom 让 io.Copy 按 mio 一个帧的大小读取，理由见 protocol 包里流的 ReadFrom。
-func (c *Sniff) ReadFrom(r io.Reader) (int64, error) {
+func (c *sniLogConn) ReadFrom(r io.Reader) (int64, error) {
 	buf := make([]byte, protocol.MaxFramePayload)
 	var total int64
 	for {
@@ -57,7 +57,7 @@ func (c *Sniff) ReadFrom(r io.Reader) (int64, error) {
 	}
 }
 
-func (c *Sniff) CloseWrite() error {
+func (c *sniLogConn) CloseWrite() error {
 	if cw, ok := c.Conn.(interface{ CloseWrite() error }); ok {
 		return cw.CloseWrite()
 	}

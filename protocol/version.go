@@ -1,3 +1,3 @@
 package protocol
-
-const Version = "0.5.7"
+// 这里是mio的协议版本。
+const Version = "0.6.0"

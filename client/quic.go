@@ -151,16 +151,30 @@ func (s *quicSession) dialStream(ctx context.Context, target string) (net.Conn, 
 		return nil, err
 	}
 	conn := protocol.NewStreamConn(stream, func() { stream.CancelRead(0) }, s.conn.LocalAddr(), s.conn.RemoteAddr())
-	if err := protocol.WriteRequest(conn, target); err != nil {
+	stop := context.AfterFunc(ctx, func() {
+		stream.CancelRead(0)
+		stream.CancelWrite(0)
+	})
+	defer stop()
+	deadline := time.Now().Add(replyTimeout)
+	if limit, ok := ctx.Deadline(); ok && limit.Before(deadline) {
+		deadline = limit
+	}
+	conn.SetDeadline(deadline)
+	err = protocol.WriteRequest(conn, target)
+	if err == nil {
+		err = protocol.ReadReply(conn)
+	}
+	if !stop() || ctx.Err() != nil {
+		stream.CancelRead(0)
+		stream.CancelWrite(0)
+		return nil, ctx.Err()
+	}
+	if err != nil {
 		conn.Close()
 		return nil, err
 	}
-	conn.SetReadDeadline(time.Now().Add(replyTimeout))
-	if err := protocol.ReadReply(conn); err != nil {
-		conn.Close()
-		return nil, err
-	}
-	conn.SetReadDeadline(time.Time{})
+	conn.SetDeadline(time.Time{})
 	return conn, nil
 }
 

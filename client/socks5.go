@@ -69,7 +69,7 @@ func (node *SOCKS5Node) dial(ctx context.Context, _, _ string, request *socks5.R
 		return nil, err
 	}
 	slog.Info("outbound/mio: outbound connection to " + target)
-	return &Sniff{Conn: conn, host: dest.FQDN}, nil
+	return &sniLogConn{Conn: conn, host: dest.FQDN}, nil
 }
 
 type loggingListener struct{ net.Listener }
@@ -111,7 +111,6 @@ func (node *SOCKS5Node) Serve(ctx context.Context) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	go node.dialer.WarmUp(ctx)
 	go func() {
 		<-ctx.Done()
 		listener.Close()

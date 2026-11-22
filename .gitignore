@@ -9,6 +9,7 @@ mio
 *.so
 *.dylib
 *.log
+
 # Config file
 *.toml
 

@@ -38,6 +38,14 @@ func newTCPPool(peer protocol.Peer) *tcpPool {
 	return &tcpPool{peer: peer}
 }
 
+// addSession makes the session established by a transport probe available for requests.
+func (p *tcpPool) addSession(session *protocol.Session) {
+	session.SetIdleTimeout(minSessionIdle + rand.N(maxSessionIdle-minSessionIdle))
+	p.mu.Lock()
+	p.sessions = append(p.sessions, session)
+	p.mu.Unlock()
+}
+
 // dial 在一条可用的连接上请求服务端连接 target；连接在途中断开时换一条新的再试一次。
 func (p *tcpPool) dial(ctx context.Context, target string) (conn net.Conn, err error) {
 	for attempt := 0; attempt < 2; attempt++ {
