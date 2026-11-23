@@ -1,6 +1,7 @@
 package protocol
 
 import (
+	"bytes"
 	"encoding/binary"
 	"errors"
 	"io"
@@ -22,16 +23,16 @@ type stream struct {
 	writeLock sync.Mutex // 让同一条流上的 Write、CloseWrite 按调用顺序发出
 
 	mu              sync.Mutex
-	id              uint32 // 流编号；客户端的流在第一次发送数据前为 0
-	buf             []byte // 已收到、还没被读走的数据
-	recvWindow      int    // 对端还可以发送的字节数
-	unacked         int    // 已被读走、还没通过 window 帧还给对端的字节数
-	recvClosed      bool   // 对端已发来 close 帧
-	reset           bool   // 对端已发来 reset 帧
-	sendCredit      int    // 还可以向对端发送的字节数
-	sendClosed      bool   // 已发出 close 帧，或不需要再发
-	closed          bool   // 本端已调用 Close
-	sentData        uint64 // 已发出的 data 帧数
+	id              uint32       // 流编号；客户端的流在第一次发送数据前为 0
+	buf             bytes.Buffer // 已收到、还没被读走的数据
+	recvWindow      int          // 对端还可以发送的字节数
+	unacked         int          // 已被读走、还没通过 window 帧还给对端的字节数
+	recvClosed      bool         // 对端已发来 close 帧
+	reset           bool         // 对端已发来 reset 帧
+	sendCredit      int          // 还可以向对端发送的字节数
+	sendClosed      bool         // 已发出 close 帧，或不需要再发
+	closed          bool         // 本端已调用 Close
+	sentData        uint64       // 已发出的 data 帧数
 	nextPadding     *padding.Range
 	readDeadline    time.Time
 	writeDeadline   time.Time
@@ -60,9 +61,11 @@ func notify(ch chan struct{}) {
 }
 
 // wait 等到 ch 被通知、deadline 到期或会话关闭。
-func (st *stream) wait(ch chan struct{}, deadline time.Time) error {
+func (st *stream) wait(ch, creditReady <-chan struct{}, deadline time.Time) error {
 	select {
 	case <-ch:
+		return nil
+	case <-creditReady:
 		return nil
 	default:
 	}
@@ -79,6 +82,8 @@ func (st *stream) wait(ch chan struct{}, deadline time.Time) error {
 	select {
 	case <-ch:
 		return nil
+	case <-creditReady:
+		return nil
 	case <-timeout:
 		return os.ErrDeadlineExceeded
 	case <-st.sess.done:
@@ -90,6 +95,7 @@ func (st *stream) receive(payload []byte) error {
 	st.mu.Lock()
 	if st.closed {
 		st.mu.Unlock()
+		st.sess.releaseReceiveCredit(len(payload))
 		return nil
 	}
 	if len(payload) > st.recvWindow {
@@ -97,7 +103,7 @@ func (st *stream) receive(payload []byte) error {
 		return errors.New("peer exceeded the stream window")
 	}
 	st.recvWindow -= len(payload)
-	st.buf = append(st.buf, payload...)
+	st.buf.Write(payload)
 	st.mu.Unlock()
 	notify(st.readNotify)
 	return nil
@@ -118,11 +124,16 @@ func (st *stream) receiveReset() {
 	notify(st.writeNotify)
 }
 
-func (st *stream) addCredit(increment int) {
+func (st *stream) addCredit(increment int) bool {
 	st.mu.Lock()
+	if increment > StreamWindow-st.sendCredit {
+		st.mu.Unlock()
+		return false
+	}
 	st.sendCredit += increment
 	st.mu.Unlock()
 	notify(st.writeNotify)
+	return true
 }
 
 // Read 读取对端发来的数据。对端半关闭后，读完剩余数据返回 io.EOF；对端放弃这条流后，读完剩余数据返回 ErrStreamReset。
@@ -136,11 +147,12 @@ func (st *stream) Read(p []byte) (int, error) {
 			st.mu.Unlock()
 			return 0, net.ErrClosed
 		}
-		if len(st.buf) > 0 {
-			n := copy(p, st.buf)
-			st.buf = st.buf[n:]
-			if len(st.buf) == 0 {
-				st.buf = nil
+		if st.buf.Len() > 0 {
+			n, _ := st.buf.Read(p)
+			if st.buf.Len() == 0 {
+				st.buf = bytes.Buffer{}
+			} else if st.buf.Cap() > 2*st.buf.Len()+MaxFramePayload {
+				st.buf = *bytes.NewBuffer(bytes.Clone(st.buf.Bytes()))
 			}
 			// 读走的数据攒够半个窗口再还给对端，避免每次读都发一个 window 帧。
 			st.unacked += n
@@ -152,6 +164,7 @@ func (st *stream) Read(p []byte) (int, error) {
 				st.recvWindow += increment
 			}
 			st.mu.Unlock()
+			st.sess.releaseReceiveCredit(n)
 			if increment > 0 {
 				st.sess.writeFrame(FrameWindow, id, binary.BigEndian.AppendUint32(nil, uint32(increment)), 0)
 			}
@@ -167,7 +180,7 @@ func (st *stream) Read(p []byte) (int, error) {
 		}
 		deadline := st.readDeadline
 		st.mu.Unlock()
-		if err := st.wait(st.readNotify, deadline); err != nil {
+		if err := st.wait(st.readNotify, nil, deadline); err != nil {
 			return 0, err
 		}
 	}
@@ -193,10 +206,14 @@ func (st *stream) Write(p []byte) (int, error) {
 			return total, os.ErrDeadlineExceeded
 		}
 		n := min(len(p), st.sendCredit, MaxFramePayload)
+		var creditReady <-chan struct{}
+		if n > 0 {
+			n, creditReady = st.sess.takeSendCredit(n)
+		}
 		if n == 0 {
 			deadline := st.writeDeadline
 			st.mu.Unlock()
-			if err := st.wait(st.writeNotify, deadline); err != nil {
+			if err := st.wait(st.writeNotify, creditReady, deadline); err != nil {
 				return total, err
 			}
 			continue
@@ -215,6 +232,7 @@ func (st *stream) Write(p []byte) (int, error) {
 			padLength = st.sess.paddingLength(FrameData, n, dataFrames)
 		}
 		if err := st.writeData(p[:n], padLength); err != nil {
+			st.sess.addSendCredit(n)
 			st.mu.Lock()
 			st.sendCredit += n
 			st.sentData--
@@ -385,7 +403,8 @@ func (st *stream) Close() error {
 		return nil
 	}
 	st.closed = true
-	st.buf = nil
+	discarded := st.buf.Len()
+	st.buf = bytes.Buffer{}
 	// 没有编号的流对端并不知道，也就不需要通知。
 	id := st.id
 	known := id != 0
@@ -393,6 +412,7 @@ func (st *stream) Close() error {
 	sendReset := known && !st.recvClosed && !st.reset
 	st.sendClosed = true
 	st.mu.Unlock()
+	st.sess.releaseReceiveCredit(discarded)
 
 	notify(st.readNotify)
 	notify(st.writeNotify)

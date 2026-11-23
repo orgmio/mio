@@ -13,16 +13,18 @@ import (
 )
 
 const (
-	minProbeInterval = 10 * time.Minute
-	maxProbeInterval = 30 * time.Minute
-	probeTimeout     = 25 * time.Second
+	minFirstProbeDelay = time.Second
+	maxFirstProbeDelay = 10 * time.Second
+	minProbeInterval   = 10 * time.Minute
+	maxProbeInterval   = 30 * time.Minute
+	probeTimeout       = 25 * time.Second
+	quicSlowThreshold  = 2 * time.Second
 )
 
 type transportChoice uint8
 
 const (
-	transportUnknown transportChoice = iota
-	transportTCP
+	transportTCP transportChoice = iota
 	transportQUIC
 )
 
@@ -30,6 +32,7 @@ type dialResult struct {
 	transport transportChoice
 	tcp       *protocol.Session
 	quic      *quicSession
+	conn      net.Conn
 	err       error
 }
 
@@ -40,192 +43,252 @@ func (r dialResult) close() {
 	if r.quic != nil {
 		r.quic.Close()
 	}
+	if r.conn != nil {
+		r.conn.Close()
+	}
 }
 
-// Dialer 会并行探测 TCP 和 QUIC，随后在 10 到 30 分钟后重新比较两者。
+// Dialer starts on TCP and periodically compares fresh TCP and QUIC sessions.
 type Dialer struct {
-	peer protocol.Peer
-	tcp  *tcpPool
+	peer   protocol.Peer
+	tcp    *tcpPool
+	ctx    context.Context
+	cancel context.CancelFunc
 
-	mu        sync.Mutex
-	session   *quicSession
-	selected  transportChoice
-	probing   bool
-	nextProbe time.Time
+	mu         sync.Mutex
+	selected   transportChoice
+	quic       *quicSession
+	probeTimer *time.Timer
+	generation uint64
+	recovery   chan struct{}
 }
 
 func NewDialer(peer protocol.Peer) *Dialer {
-	return &Dialer{peer: peer, tcp: newTCPPool(peer)}
+	ctx, cancel := context.WithCancel(context.Background())
+	return &Dialer{peer: peer, tcp: newTCPPool(ctx, peer), ctx: ctx, cancel: cancel}
 }
 
 func (d *Dialer) Dial(ctx context.Context, target string) (net.Conn, error) {
+	ctx, cancel := context.WithCancel(ctx)
+	stop := context.AfterFunc(d.ctx, cancel)
+	defer stop()
+	defer cancel()
+	if err := d.ctx.Err(); err != nil {
+		return nil, err
+	}
+
 	d.mu.Lock()
-	if d.probing {
-		session, selected := d.session, d.selected
-		d.mu.Unlock()
-		return d.dialSelected(ctx, target, selected, session)
-	}
-	if d.selected == transportUnknown || !time.Now().Before(d.nextProbe) {
-		d.probing = true
-		d.mu.Unlock()
-		return d.probe(ctx, target)
-	}
-	session := d.session
-	selected := d.selected
+	selected, quic, generation := d.selected, d.quic, d.generation
 	d.mu.Unlock()
 
-	return d.dialSelected(ctx, target, selected, session)
+	conn, err := d.dialSelected(ctx, target, selected, quic)
+	if err == nil || errors.Is(err, protocol.ErrConnectFailed) {
+		d.mu.Lock()
+		if d.probeTimer == nil && d.recovery == nil && d.ctx.Err() == nil {
+			d.scheduleProbeLocked(minFirstProbeDelay, maxFirstProbeDelay)
+		}
+		d.mu.Unlock()
+		return conn, err
+	}
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+	slog.Debug("outbound/mio: selected transport failed, racing TCP and QUIC", "err", err)
+	return d.recover(ctx, target, generation, err)
 }
 
-func (d *Dialer) dialSelected(ctx context.Context, target string, selected transportChoice, session *quicSession) (net.Conn, error) {
-	if selected == transportQUIC && session != nil {
-		conn, err := session.dialStream(ctx, target)
+func (d *Dialer) dialSelected(ctx context.Context, target string, selected transportChoice, quic *quicSession) (net.Conn, error) {
+	if selected == transportQUIC {
+		quickCtx, cancel := context.WithTimeout(ctx, quicSlowThreshold)
+		defer cancel()
+		return quic.dialStream(quickCtx, target)
+	}
+	return d.tcp.dial(ctx, target)
+}
+
+func (d *Dialer) recover(ctx context.Context, target string, generation uint64, previousErr error) (net.Conn, error) {
+	d.mu.Lock()
+	if d.recovery == nil && generation != d.generation {
+		selected, quic := d.selected, d.quic
+		d.mu.Unlock()
+		conn, err := d.dialSelected(ctx, target, selected, quic)
 		if err == nil || errors.Is(err, protocol.ErrConnectFailed) || ctx.Err() != nil {
 			return conn, err
 		}
-		if session.conn.Context().Err() != nil {
-			d.drop(session)
+		previousErr = err
+		d.mu.Lock()
+	}
+	if d.recovery != nil {
+		done := d.recovery
+		d.mu.Unlock()
+		select {
+		case <-done:
+		case <-ctx.Done():
+			return nil, ctx.Err()
 		}
-		slog.Debug("outbound/mio: h3 stream failed, falling back to tcp", "err", err)
+		d.mu.Lock()
+		selected, quic := d.selected, d.quic
+		d.mu.Unlock()
+		return d.dialSelected(ctx, target, selected, quic)
 	}
-
-	conn, tcpErr := d.tcp.dial(ctx, target)
-	if tcpErr == nil {
-		if selected == transportQUIC {
-			d.selectTransport(transportTCP, nil)
-		}
-		return conn, nil
+	if d.ctx.Err() != nil {
+		d.mu.Unlock()
+		return nil, d.ctx.Err()
 	}
-	if errors.Is(tcpErr, protocol.ErrConnectFailed) || ctx.Err() != nil {
-		return conn, tcpErr
-	}
-	owned := false
-	if session == nil || session.conn.Context().Err() != nil {
-		var quicErr error
-		session, quicErr = dialQUIC(ctx, d.peer)
-		if quicErr != nil {
-			return nil, errors.Join(tcpErr, quicErr)
-		}
-		owned = true
-	}
-	quicConn, quicErr := session.dialStream(ctx, target)
-	if quicErr == nil {
-		if owned {
-			d.selectTransport(transportQUIC, session)
-		} else {
-			d.selectTransport(transportQUIC, nil)
-		}
-		return quicConn, nil
-	}
-	if owned {
-		session.Close()
-	}
-	if session.conn.Context().Err() != nil {
-		d.drop(session)
-	}
-	return nil, errors.Join(tcpErr, quicErr)
-}
-
-func (d *Dialer) drop(session *quicSession) {
-	d.mu.Lock()
-	if d.session == session {
-		d.session = nil
+	done := make(chan struct{})
+	d.recovery = done
+	d.generation++
+	if d.probeTimer != nil {
+		d.probeTimer.Stop()
 	}
 	d.mu.Unlock()
-	session.Close()
+
+	result, err := d.race(ctx, target, true)
+
+	d.mu.Lock()
+	var retired *quicSession
+	if d.ctx.Err() != nil {
+		if err == nil {
+			err = d.ctx.Err()
+			defer result.close()
+		}
+	} else {
+		minimum, maximum := minProbeInterval, maxProbeInterval
+		if d.probeTimer == nil {
+			minimum, maximum = minFirstProbeDelay, maxFirstProbeDelay
+		}
+		if err == nil {
+			retired = d.selectLocked(result)
+		}
+		if err == nil || d.probeTimer != nil {
+			d.scheduleProbeLocked(minimum, maximum)
+		}
+	}
+	d.recovery = nil
+	close(done)
+	d.mu.Unlock()
+	if retired != nil {
+		retired.retire()
+	}
+	if err != nil {
+		return nil, errors.Join(previousErr, err)
+	}
+	return result.conn, nil
 }
 
-// probe races fresh authenticated connections to the VPS. Only after choosing
-// a transport do we ask the VPS to connect to the requested address.
-func (d *Dialer) probe(ctx context.Context, target string) (net.Conn, error) {
-	probeCtx, cancel := context.WithTimeout(ctx, probeTimeout)
-	results := make(chan dialResult, 2)
-	go func() {
-		session, err := protocol.DialSession(probeCtx, d.peer)
-		results <- dialResult{transport: transportTCP, tcp: session, err: err}
-	}()
-	go func() {
-		session, err := dialQUIC(probeCtx, d.peer)
-		results <- dialResult{transport: transportQUIC, quic: session, err: err}
-	}()
+func (d *Dialer) scheduleProbeLocked(minimum, maximum time.Duration) {
+	d.generation++
+	generation := d.generation
+	d.probeTimer = time.AfterFunc(minimum+rand.N(maximum-minimum), func() { d.probe(generation) })
+}
 
+func (d *Dialer) probe(generation uint64) {
+	d.mu.Lock()
+	current := generation == d.generation && d.ctx.Err() == nil
+	d.mu.Unlock()
+	if !current {
+		return
+	}
+	result, err := d.race(d.ctx, "", false)
+	d.mu.Lock()
+	if generation != d.generation || d.ctx.Err() != nil {
+		d.mu.Unlock()
+		result.close()
+		return
+	}
+	var retired *quicSession
+	if err == nil {
+		retired = d.selectLocked(result)
+	}
+	d.scheduleProbeLocked(minProbeInterval, maxProbeInterval)
+	d.mu.Unlock()
+	if retired != nil {
+		retired.retire()
+	}
+}
+
+// Periodic probes only authenticate. Recovery also waits for a successful
+// target reply, so it can distinguish a slow QUIC stream from a slow handshake.
+func (d *Dialer) race(ctx context.Context, target string, requestTarget bool) (dialResult, error) {
+	ctx, cancel := context.WithTimeout(ctx, probeTimeout)
+	results := make(chan dialResult, 2)
+	for _, transport := range []transportChoice{transportTCP, transportQUIC} {
+		go func() {
+			result := dialResult{transport: transport}
+			if transport == transportTCP {
+				result.tcp, result.err = protocol.DialSession(ctx, d.peer)
+				if requestTarget && result.err == nil {
+					result.conn, result.err = result.tcp.Dial(ctx, target)
+				}
+			} else {
+				result.quic, result.err = dialQUIC(ctx, d.peer)
+				if requestTarget && result.err == nil {
+					result.conn, result.err = result.quic.dialStream(ctx, target)
+				}
+			}
+			results <- result
+		}()
+	}
 	remaining := 2
 	defer func() {
 		cancel()
 		if remaining > 0 {
-			go func(n int) {
-				for range n {
+			go func() {
+				for range remaining {
 					(<-results).close()
 				}
-			}(remaining)
+			}()
 		}
 	}()
 
-	var probeErr error
+	var raceErr error
 	for remaining > 0 {
 		select {
-		case <-probeCtx.Done():
-			d.finishProbe(dialResult{})
-			return nil, probeCtx.Err()
+		case <-ctx.Done():
+			return dialResult{}, ctx.Err()
 		case result := <-results:
 			remaining--
-			if probeCtx.Err() != nil {
+			if ctx.Err() != nil {
 				result.close()
-				d.finishProbe(dialResult{})
-				return nil, probeCtx.Err()
+				return dialResult{}, ctx.Err()
 			}
-			if result.err != nil {
-				result.close()
-				probeErr = errors.Join(probeErr, result.err)
-				continue
+			if result.err == nil {
+				return result, nil
 			}
-			cancel()
-			if result.tcp != nil {
-				d.tcp.addSession(result.tcp)
-			}
-			session := d.finishProbe(result)
-			return d.dialSelected(ctx, target, result.transport, session)
+			result.close()
+			raceErr = errors.Join(raceErr, result.err)
 		}
 	}
-	d.finishProbe(dialResult{})
-	return nil, probeErr
+	return dialResult{}, raceErr
 }
 
-func (d *Dialer) finishProbe(result dialResult) *quicSession {
+// selectLocked installs the winner for new requests and returns the previous
+// QUIC session so its existing streams can finish.
+func (d *Dialer) selectLocked(result dialResult) *quicSession {
+	if result.tcp != nil {
+		d.tcp.addSession(result.tcp)
+	}
+	old := d.quic
+	d.selected, d.quic = result.transport, result.quic
+	path := "TCP"
+	if result.quic != nil {
+		path = "QUIC"
+	}
+	slog.Debug("outbound/mio: transport race winner", "transport", path)
+	return old
+}
+
+// Close stops background probes and closes the current sessions.
+func (d *Dialer) Close() {
+	d.cancel()
 	d.mu.Lock()
-	d.probing = false
-	var discard *quicSession
-	if result.transport != transportUnknown {
-		if result.quic != nil && d.session != nil {
-			if d.session.conn.Context().Err() == nil {
-				// Keep serving existing streams on the established session.
-				discard, result.quic = result.quic, nil
-			} else {
-				discard = d.session
-			}
-		}
-		d.setTransportLocked(result.transport, result.quic)
+	if d.probeTimer != nil {
+		d.probeTimer.Stop()
 	}
-	session := d.session
+	quic := d.quic
 	d.mu.Unlock()
-	if discard != nil {
-		discard.Close()
+	if quic != nil {
+		quic.Close()
 	}
-	return session
-}
-
-func (d *Dialer) selectTransport(selected transportChoice, session *quicSession) {
-	d.mu.Lock()
-	d.setTransportLocked(selected, session)
-	d.mu.Unlock()
-}
-
-func (d *Dialer) setTransportLocked(selected transportChoice, session *quicSession) {
-	if selected != transportUnknown {
-		d.selected = selected
-	}
-	if session != nil {
-		d.session = session
-	}
-	d.nextProbe = time.Now().Add(minProbeInterval + rand.N(maxProbeInterval-minProbeInterval))
+	d.tcp.close()
 }

@@ -12,14 +12,17 @@ import (
 	"time"
 )
 
-// acceptBacklog 是服务端已被客户端打开、但还没被 Accept 取走的流的上限，超出的流会被重置。
-const acceptBacklog = 256
+// MaxSessionStreams limits the number of concurrent streams on a TCP session.
+const MaxSessionStreams = 100
 
 // ErrSessionClosed 表示会话已经关闭，不能再打开或接受流。
 var ErrSessionClosed = errors.New("session closed")
 
+// ErrStreamLimit indicates that the session already has MaxSessionStreams streams.
+var ErrStreamLimit = errors.New("session stream limit reached")
+
 // Session 是一条 mio 加密连接：每个帧封装为一条 TLS Application Data 记录，用 AES-256-GCM 加密，
-// 5 字节记录头作为附加数据参与认证，nonce 为记录序号。一个 Session 上可以同时有多条互不阻塞的流，
+// 5 字节记录头作为附加数据参与认证，nonce 为记录序号。一个 Session 上可以同时有多条流，
 // 每条流是一个 net.Conn。
 //
 // Session 的方法都可以并发调用。
@@ -53,7 +56,14 @@ type Session struct {
 	idleUntil   time.Time
 	idleTimer   *time.Timer // 整个会话只有这一个空闲定时器，每次变空闲时重置
 
+	sendCredit   int
+	recvCredit   int
+	recvConsumed int
+	creditReady  chan struct{}
+	windowReady  chan struct{}
+
 	accept chan *stream
+	reject chan uint32
 	done   chan struct{}
 }
 
@@ -62,16 +72,21 @@ func newSession(conn net.Conn, reader *bufio.Reader, send, recv cipher.AEAD, isC
 		reader = bufio.NewReader(conn)
 	}
 	return &Session{
-		conn:    conn,
-		writeMu: make(chan struct{}, 1),
-		reader:  reader,
-		client:  isClient,
-		send:    send,
-		recv:    recv,
-		streams: make(map[uint32]*stream),
-		nextID:  1,
-		accept:  make(chan *stream, acceptBacklog),
-		done:    make(chan struct{}),
+		conn:        conn,
+		writeMu:     make(chan struct{}, 1),
+		reader:      reader,
+		client:      isClient,
+		send:        send,
+		recv:        recv,
+		streams:     make(map[uint32]*stream),
+		nextID:      1,
+		sendCredit:  SessionWindow,
+		recvCredit:  SessionWindow,
+		creditReady: make(chan struct{}),
+		windowReady: make(chan struct{}, 1),
+		accept:      make(chan *stream, MaxSessionStreams),
+		reject:      make(chan uint32, MaxSessionStreams),
+		done:        make(chan struct{}),
 	}
 }
 
@@ -81,7 +96,10 @@ func (s *Session) rekey(send, recv cipher.AEAD) {
 	s.sendSeq, s.recvSeq = 0, 0
 }
 
-func (s *Session) start() { go s.readLoop() }
+func (s *Session) start() {
+	go s.writeControlFrames()
+	go s.readLoop()
+}
 
 // Open 打开一条新的流，只有客户端可以调用。流在第一次 Write 时才取得编号，对端也是在那时才知道它。
 func (s *Session) Open() (net.Conn, error) {
@@ -92,6 +110,9 @@ func (s *Session) Open() (net.Conn, error) {
 	defer s.mu.Unlock()
 	if s.err != nil {
 		return nil, s.err
+	}
+	if len(s.streams)+s.unopened >= MaxSessionStreams {
+		return nil, ErrStreamLimit
 	}
 	s.unopened++
 	return newStream(s, 0), nil
@@ -218,11 +239,15 @@ func (s *Session) readLoop() {
 		}
 		switch typ {
 		case FrameData:
-			if st := s.lookup(id, true); st != nil {
-				if err := st.receive(payload); err != nil {
-					s.closeWithError(err)
-					return
-				}
+			if !s.takeReceiveCredit(len(payload)) {
+				s.closeWithError(errors.New("peer exceeded the session window"))
+				return
+			}
+			if st := s.lookup(id, true); st == nil {
+				s.releaseReceiveCredit(len(payload))
+			} else if err := st.receive(payload); err != nil {
+				s.closeWithError(err)
+				return
 			}
 		case FrameClose:
 			if st := s.lookup(id, false); st != nil {
@@ -233,8 +258,23 @@ func (s *Session) readLoop() {
 				st.receiveReset()
 			}
 		case FrameWindow:
-			if st := s.lookup(id, false); st != nil && len(payload) == 4 {
-				st.addCredit(int(binary.BigEndian.Uint32(payload)))
+			if len(payload) != 4 {
+				s.closeWithError(errors.New("invalid window frame"))
+				return
+			}
+			increment := binary.BigEndian.Uint32(payload)
+			switch {
+			case id == 0:
+				if increment == 0 || increment > SessionWindow || !s.addSendCredit(int(increment)) {
+					s.closeWithError(errors.New("invalid session window increment"))
+					return
+				}
+			default:
+				if st := s.lookup(id, false); st != nil &&
+					(increment == 0 || increment > StreamWindow || !st.addCredit(int(increment))) {
+					s.closeWithError(errors.New("invalid stream window increment"))
+					return
+				}
 			}
 		default:
 			// 不认识的帧类型直接跳过，留给以后扩展。
@@ -246,22 +286,30 @@ func (s *Session) readLoop() {
 // 已经关闭的流返回 nil，发给它的帧会被丢弃。
 func (s *Session) lookup(id uint32, open bool) *stream {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if st := s.streams[id]; st != nil {
+		s.mu.Unlock()
 		return st
 	}
 	if !open || s.client || id <= s.lastPeerID || s.err != nil {
+		s.mu.Unlock()
 		return nil
 	}
 	s.lastPeerID = id
-	st := newStream(s, id)
-	select {
-	case s.accept <- st:
-		s.streams[id] = st
-		return st
-	default:
-		// 积压的流太多，拒绝这一条。不能在 readLoop 里等待写操作，所以另起协程发送。
-		go s.writeFrame(FrameReset, id, nil, 0)
-		return nil
+	if len(s.streams) < MaxSessionStreams {
+		st := newStream(s, id)
+		select {
+		case s.accept <- st:
+			s.streams[id] = st
+			s.mu.Unlock()
+			return st
+		default:
+		}
 	}
+	s.mu.Unlock()
+	select {
+	case s.reject <- id:
+	default:
+		s.closeWithError(errors.New("too many rejected streams"))
+	}
+	return nil
 }

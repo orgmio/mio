@@ -5,10 +5,12 @@ import (
 	"crypto/ecdh"
 	"crypto/hmac"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"io"
 	"net"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/apernet/quic-go"
@@ -21,13 +23,21 @@ import (
 const (
 	quicDialTimeout = 5 * time.Second
 	replyTimeout    = 10 * time.Second
+	quicDrainTime   = 30 * time.Second
 )
+
+var errQUICRetired = errors.New("QUIC session retired")
 
 // quicSession 是到服务端的一条长连接，每个代理连接占用其上的一个 stream。
 type quicSession struct {
 	conn      *quic.Conn
 	transport *quic.Transport
 	udp       *net.UDPConn
+	closeOnce sync.Once
+
+	mu      sync.Mutex
+	active  int
+	retired bool
 }
 
 // emptyConnID 让客户端使用零长度源连接 ID，与 Chrome 一致。
@@ -101,6 +111,7 @@ func dialQUIC(ctx context.Context, peer protocol.Peer) (*quicSession, error) {
 		session.Close()
 		return nil, fmt.Errorf("quic auth failed (wrong public key, or server is not running mio protocol %s): %w", protocol.Version, err)
 	}
+	context.AfterFunc(conn.Context(), session.Close)
 	return session, nil
 }
 
@@ -146,6 +157,20 @@ func (s *quicSession) authenticate(parent context.Context, server *ecdh.PublicKe
 }
 
 func (s *quicSession) dialStream(ctx context.Context, target string) (net.Conn, error) {
+	s.mu.Lock()
+	if s.retired {
+		s.mu.Unlock()
+		return nil, errQUICRetired
+	}
+	s.active++
+	s.mu.Unlock()
+	opened := false
+	defer func() {
+		if !opened {
+			s.releaseStream()
+		}
+	}()
+
 	stream, err := s.conn.OpenStreamSync(ctx)
 	if err != nil {
 		return nil, err
@@ -175,11 +200,46 @@ func (s *quicSession) dialStream(ctx context.Context, target string) (net.Conn, 
 		return nil, err
 	}
 	conn.SetDeadline(time.Time{})
-	return conn, nil
+	opened = true
+	return &quicStreamConn{StreamConn: conn, release: sync.OnceFunc(s.releaseStream)}, nil
+}
+
+type quicStreamConn struct {
+	*protocol.StreamConn
+	release func()
+}
+
+func (c *quicStreamConn) Close() error {
+	defer c.release()
+	return c.StreamConn.Close()
+}
+
+func (s *quicSession) releaseStream() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.active--
+	if s.active == 0 && s.retired {
+		// Give QUIC time to finish sending the last stream's data and FIN.
+		time.AfterFunc(quicDrainTime, s.Close)
+	}
+}
+
+func (s *quicSession) retire() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.retired {
+		return
+	}
+	s.retired = true
+	if s.active == 0 {
+		time.AfterFunc(quicDrainTime, s.Close)
+	}
 }
 
 func (s *quicSession) Close() {
-	s.conn.CloseWithError(0, "")
-	s.transport.Close()
-	s.udp.Close()
+	s.closeOnce.Do(func() {
+		s.conn.CloseWithError(0, "")
+		s.transport.Close()
+		s.udp.Close()
+	})
 }

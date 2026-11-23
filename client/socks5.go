@@ -110,6 +110,7 @@ func (node *SOCKS5Node) Serve(ctx context.Context) error {
 	}
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	defer node.dialer.Close()
 
 	go func() {
 		<-ctx.Done()
