@@ -6,6 +6,7 @@ import (
 	"crypto/ecdh"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"slices"
 	"time"
@@ -78,6 +79,7 @@ func Handshake(ctx context.Context, raw net.Conn, peer Peer) (*Session, error) {
 	if err := conn.HandshakeContext(ctx); err != nil {
 		return nil, fmt.Errorf("tls handshake: %w", err)
 	}
+	slog.InfoContext(ctx, "outbound/mio: TCP TLS handshake complete, starting mio authentication", "peer", raw.RemoteAddr())
 	clientRandom := conn.HandshakeState.Hello.Random
 	serverRandom := conn.HandshakeState.ServerHello.Random
 

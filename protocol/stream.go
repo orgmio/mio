@@ -16,6 +16,8 @@ import (
 // ErrStreamReset 表示对端已放弃这条流。
 var ErrStreamReset = errors.New("stream reset by peer")
 
+const retainedStreamBuffer = 32 << 10
+
 // stream 是会话上的一条流。
 type stream struct {
 	sess *Session
@@ -150,8 +152,12 @@ func (st *stream) Read(p []byte) (int, error) {
 		if st.buf.Len() > 0 {
 			n, _ := st.buf.Read(p)
 			if st.buf.Len() == 0 {
-				st.buf = bytes.Buffer{}
-			} else if st.buf.Cap() > 2*st.buf.Len()+MaxFramePayload {
+				if st.buf.Cap() > retainedStreamBuffer || st.recvClosed || st.reset {
+					st.buf = bytes.Buffer{}
+				} else {
+					st.buf.Reset()
+				}
+			} else if st.buf.Cap() > max(retainedStreamBuffer, 4*st.buf.Len()) {
 				st.buf = *bytes.NewBuffer(bytes.Clone(st.buf.Bytes()))
 			}
 			// 读走的数据攒够半个窗口再还给对端，避免每次读都发一个 window 帧。

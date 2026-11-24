@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"os"
 	"strconv"
@@ -19,16 +20,31 @@ const (
 )
 
 // DialSession 连接 peer 并完成握手与认证，返回的会话上可以用 Dial 打开多条到不同目标的连接。
-func DialSession(ctx context.Context, peer Peer) (*Session, error) {
+func DialSession(ctx context.Context, peer Peer) (_ *Session, err error) {
 	address := net.JoinHostPort(peer.Server, strconv.Itoa(peer.ServerPort))
 	ctx, cancel := context.WithTimeout(ctx, handshakeTimeout)
 	defer cancel()
+	started := time.Now()
+	stage := "connect"
+	slog.InfoContext(ctx, "outbound/mio: TCP connecting", "peer", address)
+	defer func() {
+		if err == nil {
+			return
+		}
+		if errors.Is(ctx.Err(), context.Canceled) {
+			slog.InfoContext(ctx, "outbound/mio: TCP dial canceled", "peer", address, "stage", stage, "elapsed", time.Since(started))
+			return
+		}
+		slog.WarnContext(ctx, "outbound/mio: TCP dial failed", "peer", address, "stage", stage, "elapsed", time.Since(started), "err", err)
+	}()
 	dialer := net.Dialer{Timeout: dialTimeout}
 
 	conn, err := dialer.DialContext(ctx, "tcp", address)
 	if err != nil {
 		return nil, fmt.Errorf("connect to peer %s: %w", address, err)
 	}
+	stage = "handshake"
+	slog.InfoContext(ctx, "outbound/mio: TCP connected, starting TLS handshake", "peer", address, "elapsed", time.Since(started))
 	stop := context.AfterFunc(ctx, func() { conn.Close() })
 	session, err := Handshake(ctx, conn, peer)
 	if !stop() || ctx.Err() != nil {
@@ -39,6 +55,7 @@ func DialSession(ctx context.Context, peer Peer) (*Session, error) {
 		conn.Close()
 		return nil, fmt.Errorf("peer %s: %w", address, err)
 	}
+	slog.InfoContext(ctx, "outbound/mio: TCP mio session ready", "peer", address, "elapsed", time.Since(started))
 	return session, nil
 }
 

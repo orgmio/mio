@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"strconv"
 	"sync"
@@ -23,10 +24,7 @@ import (
 const (
 	quicDialTimeout = 5 * time.Second
 	replyTimeout    = 10 * time.Second
-	quicDrainTime   = 30 * time.Second
 )
-
-var errQUICRetired = errors.New("QUIC session retired")
 
 // quicSession 是到服务端的一条长连接，每个代理连接占用其上的一个 stream。
 type quicSession struct {
@@ -34,10 +32,6 @@ type quicSession struct {
 	transport *quic.Transport
 	udp       *net.UDPConn
 	closeOnce sync.Once
-
-	mu      sync.Mutex
-	active  int
-	retired bool
 }
 
 // emptyConnID 让客户端使用零长度源连接 ID，与 Chrome 一致。
@@ -68,15 +62,43 @@ func quicClientConfig(ipv4 bool) *quic.Config {
 	}
 }
 
-func dialQUIC(ctx context.Context, peer protocol.Peer) (*quicSession, error) {
-	addr, err := net.ResolveUDPAddr("udp", net.JoinHostPort(peer.Server, strconv.Itoa(peer.ServerPort)))
+func dialQUIC(ctx context.Context, peer protocol.Peer) (_ *quicSession, err error) {
+	address := net.JoinHostPort(peer.Server, strconv.Itoa(peer.ServerPort))
+	started := time.Now()
+	stage := "resolve"
+	slog.InfoContext(ctx, "outbound/mio: QUIC (UDP) dialing", "peer", address)
+	defer func() {
+		if err == nil {
+			return
+		}
+		if errors.Is(ctx.Err(), context.Canceled) {
+			slog.InfoContext(ctx, "outbound/mio: QUIC dial canceled", "peer", address, "stage", stage, "elapsed", time.Since(started))
+			return
+		}
+		slog.WarnContext(ctx, "outbound/mio: QUIC dial failed", "peer", address, "stage", stage, "elapsed", time.Since(started), "err", err)
+	}()
+	dialCtx, cancel := context.WithTimeout(ctx, quicDialTimeout)
+	defer cancel()
+	addrs, err := net.DefaultResolver.LookupIPAddr(dialCtx, peer.Server)
 	if err != nil {
 		return nil, err
 	}
+	if len(addrs) == 0 {
+		return nil, errors.New("no IP address for QUIC peer")
+	}
+	ip := addrs[0]
+	for _, candidate := range addrs {
+		if candidate.IP.To4() != nil {
+			ip = candidate
+			break
+		}
+	}
+	addr := &net.UDPAddr{IP: ip.IP, Port: peer.ServerPort, Zone: ip.Zone}
 	network := "udp6"
-	if addr.IP.To4() != nil {
+	if ip.IP.To4() != nil {
 		network = "udp4"
 	}
+	stage = "setup"
 	udp, err := net.ListenUDP(network, nil)
 	if err != nil {
 		return nil, err
@@ -96,8 +118,7 @@ func dialQUIC(ctx context.Context, peer protocol.Peer) (*quicSession, error) {
 		InsecureSkipVerify: true,
 		Rand:               quicauth.NewRand(marker),
 	}
-	dialCtx, cancel := context.WithTimeout(ctx, quicDialTimeout)
-	defer cancel()
+	stage = "handshake"
 	conn, err := transport.Dial(dialCtx, addr, tlsConf, quicClientConfig(addr.IP.To4() != nil))
 	if err != nil {
 		transport.Close()
@@ -105,6 +126,8 @@ func dialQUIC(ctx context.Context, peer protocol.Peer) (*quicSession, error) {
 		return nil, fmt.Errorf("quic handshake: %w", err)
 	}
 
+	stage = "authentication"
+	slog.InfoContext(ctx, "outbound/mio: QUIC handshake complete, starting mio authentication", "peer", address, "elapsed", time.Since(started))
 	congestion.UseBBR(conn)
 	session := &quicSession{conn: conn, transport: transport, udp: udp}
 	if err := session.authenticate(ctx, peer.PublicKey); err != nil {
@@ -112,6 +135,7 @@ func dialQUIC(ctx context.Context, peer protocol.Peer) (*quicSession, error) {
 		return nil, fmt.Errorf("quic auth failed (wrong public key, or server is not running mio protocol %s): %w", protocol.Version, err)
 	}
 	context.AfterFunc(conn.Context(), session.Close)
+	slog.InfoContext(ctx, "outbound/mio: QUIC mio session ready", "peer", address, "elapsed", time.Since(started))
 	return session, nil
 }
 
@@ -157,20 +181,6 @@ func (s *quicSession) authenticate(parent context.Context, server *ecdh.PublicKe
 }
 
 func (s *quicSession) dialStream(ctx context.Context, target string) (net.Conn, error) {
-	s.mu.Lock()
-	if s.retired {
-		s.mu.Unlock()
-		return nil, errQUICRetired
-	}
-	s.active++
-	s.mu.Unlock()
-	opened := false
-	defer func() {
-		if !opened {
-			s.releaseStream()
-		}
-	}()
-
 	stream, err := s.conn.OpenStreamSync(ctx)
 	if err != nil {
 		return nil, err
@@ -200,40 +210,7 @@ func (s *quicSession) dialStream(ctx context.Context, target string) (net.Conn, 
 		return nil, err
 	}
 	conn.SetDeadline(time.Time{})
-	opened = true
-	return &quicStreamConn{StreamConn: conn, release: sync.OnceFunc(s.releaseStream)}, nil
-}
-
-type quicStreamConn struct {
-	*protocol.StreamConn
-	release func()
-}
-
-func (c *quicStreamConn) Close() error {
-	defer c.release()
-	return c.StreamConn.Close()
-}
-
-func (s *quicSession) releaseStream() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.active--
-	if s.active == 0 && s.retired {
-		// Give QUIC time to finish sending the last stream's data and FIN.
-		time.AfterFunc(quicDrainTime, s.Close)
-	}
-}
-
-func (s *quicSession) retire() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.retired {
-		return
-	}
-	s.retired = true
-	if s.active == 0 {
-		time.AfterFunc(quicDrainTime, s.Close)
-	}
+	return conn, nil
 }
 
 func (s *quicSession) Close() {
