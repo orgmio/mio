@@ -33,7 +33,15 @@ jobs:
             dickname: "linux-arm64"
           - tag: "GOOS=darwin GOARCH=arm64"
             dickname: "darwin-arm64"
-          - tag: "GOOS=windows GOARCH=amd64"
+          - tag: "GOOS=windows GOAMD64=v4"
+            dickname: "windows-amd64v4.exe"
+          - tag: "GOOS=windows GOAMD64=v3"
+            dickname: "windows-amd64v3.exe"
+          - tag: "GOOS=windows GOAMD64=v2"
+            dickname: "windows-amd64v2.exe"
+          - tag: "GOOS=windows GOAMD64=v1"
+            dickname: "windows-amd64v1.exe"
+          - tag: "GOOS=windows"
             dickname: "windows-amd64.exe"
 
     steps:
