@@ -8,14 +8,13 @@
 
 ## 🚀 特性
 
+![公网 443 性能对比与本机 TCP/UDP 切换验证](https://raw.githubusercontent.com/orgmio/mio/refs/heads/main/docs/benchmark.png)
+
 - 抗审查: 使用utls来将数据包外观伪装成`Chrome`，并在认证失败时尽可能将数据转发给伪装网站。
-- 抗重放攻击：内置`client/server_random`校验机制，有效抵抗重放攻击。
+- 抗重放攻击：内置`client/server_random`校验机制和后量子加密，有效抵抗重放攻击和量子计算机解密。
 - 证书：像 Reality 一样借用 `dest` 站点，不用自己配置证书，而且完整进行一次真的TLS握手以欺骗审查设备。
 - 认证：使用mio自己的`mio keygen`命令生成一对密钥来派生X25519MLKEM768证书，十分的安全。
 - 选路：像Chrome那样先尝试TCP，然后UDP和TCP并发，并且谁快选谁。
-
-不道德的问题：本项目因为会借用伪装网站的TLS证书，所以我感觉不怎么道德；
-如果你不在乎，随便用；如果你在乎，请更换其他温和的协议。
 
 mio的发布文件上一个和下一个版本几乎都是互不兼容的，所以请严格保持相同版本；更推荐一起滚动到最新版。
 
