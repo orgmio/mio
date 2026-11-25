@@ -53,10 +53,11 @@ type quicDialAttempt struct {
 // Dialer starts on TCP. It gives the preferred transport a head start and
 // selects a backup only if it opens the requested stream first.
 type Dialer struct {
-	peer   protocol.Peer
-	tcp    *tcpPool
-	ctx    context.Context
-	cancel context.CancelFunc
+	peer       protocol.Peer
+	tcp        *tcpPool
+	enableQUIC bool
+	ctx        context.Context
+	cancel     context.CancelFunc
 
 	mu         sync.Mutex
 	preferred  transportChoice
@@ -68,17 +69,28 @@ type Dialer struct {
 }
 
 func NewDialer(peer protocol.Peer) *Dialer {
+	return newDialer(peer, true)
+}
+
+func newDialer(peer protocol.Peer, enableQUIC bool) *Dialer {
 	ctx, cancel := context.WithCancel(context.Background())
-	return &Dialer{peer: peer, tcp: newTCPPool(ctx, peer), ctx: ctx, cancel: cancel}
+	return &Dialer{peer: peer, tcp: newTCPPool(ctx, peer), enableQUIC: enableQUIC, ctx: ctx, cancel: cancel}
 }
 
 func (d *Dialer) Dial(ctx context.Context, target string) (net.Conn, error) {
+	return d.dial(ctx, protocol.StreamRequest{Target: target})
+}
+
+func (d *Dialer) dial(ctx context.Context, request protocol.StreamRequest) (net.Conn, error) {
 	ctx, cancel := context.WithTimeout(ctx, dialTimeLimit)
 	stop := context.AfterFunc(d.ctx, cancel)
 	defer stop()
 	defer cancel()
 	if err := d.ctx.Err(); err != nil {
 		return nil, err
+	}
+	if !d.enableQUIC {
+		return d.tcp.dial(ctx, request)
 	}
 
 	d.mu.Lock()
@@ -101,7 +113,7 @@ func (d *Dialer) Dial(ctx context.Context, target string) (net.Conn, error) {
 	start := func(transport transportChoice) {
 		go func() {
 			started := time.Now()
-			conn, err := d.dialStream(ctx, transport, target)
+			conn, err := d.dialStream(ctx, transport, request)
 			result := dialResult{transport: transport, conn: conn, elapsed: time.Since(started), err: err}
 			select {
 			case results <- result:
@@ -186,9 +198,9 @@ func (d *Dialer) recordSuccess(ctx context.Context, generation uint64, result di
 	}
 }
 
-func (d *Dialer) dialStream(ctx context.Context, transport transportChoice, target string) (net.Conn, error) {
+func (d *Dialer) dialStream(ctx context.Context, transport transportChoice, request protocol.StreamRequest) (net.Conn, error) {
 	if transport == transportTCP {
-		return d.tcp.dial(ctx, target)
+		return d.tcp.dial(ctx, request)
 	}
 	var streamErr error
 	for range 2 {
@@ -196,7 +208,7 @@ func (d *Dialer) dialStream(ctx context.Context, transport transportChoice, targ
 		if err != nil {
 			return nil, err
 		}
-		conn, err := session.dialStream(ctx, target)
+		conn, err := session.dialStream(ctx, request)
 		if err == nil || errors.Is(err, protocol.ErrConnectFailed) || ctx.Err() != nil || session.conn.Context().Err() == nil {
 			return conn, err
 		}

@@ -39,17 +39,18 @@ func NewSOCKS5(cfg config.Outbound) (*SOCKS5Node, error) {
 	if err != nil {
 		return nil, err
 	}
-	node := &SOCKS5Node{config: cfg, dialer: NewDialer(protocol.Peer{
+	node := &SOCKS5Node{config: cfg, dialer: newDialer(protocol.Peer{
 		Server:     cfg.Server,
 		ServerPort: cfg.ServerPort,
 		Dest:       cfg.Dest,
 		PublicKey:  publicKey,
-	})}
+	}, cfg.UDP == nil || *cfg.UDP)}
 	node.server = socks5.NewServer(
 		socks5.WithLogger(slogLogger{}),
 		socks5.WithResolver(noResolver{}),
-		socks5.WithRule(&socks5.PermitCommand{EnableConnect: true}),
+		socks5.WithRule(&socks5.PermitCommand{EnableConnect: true, EnableAssociate: cfg.Socks5UDP}),
 		socks5.WithDialAndRequest(node.dial),
+		socks5.WithAssociateHandle(node.associateUDP),
 	)
 	return node, nil
 }

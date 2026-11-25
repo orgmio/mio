@@ -33,7 +33,7 @@ mio://<server>:<server_port>?dest=<dest>&public_key=<public_key>#<name>
 mio://mio.example.com:443?dest=example.com&public_key=hSDwCYkwp1R0i33ctD73Wg2_Og0mOBr066SpjqqbTmo#%E6%88%91%E7%9A%84%E8%8A%82%E7%82%B9
 ```
 
-转换成mio自己的toml格式：
+转换成mio的toml格式：
 
 ```toml
 [outbounds]

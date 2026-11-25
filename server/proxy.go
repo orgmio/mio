@@ -17,12 +17,22 @@ func (s *Server) proxy(ctx context.Context, conn net.Conn) {
 	from := conn.RemoteAddr().String()
 
 	conn.SetReadDeadline(time.Now().Add(requestTimeout))
-	target, err := protocol.ReadRequest(conn)
+	request, err := protocol.ReadStreamRequest(conn)
 	conn.SetReadDeadline(time.Time{})
 	if err != nil {
 		slog.Error("inbound/mio: process connection from "+from+": read request", "err", err)
 		return
 	}
+	if p, ok := conn.(interface{ SetNextPadding(int, int) }); ok {
+		p.SetNextPadding(16, 512)
+	}
+	if request.UDPAssociate {
+		if err := protocol.WriteReply(conn, true); err == nil {
+			relayUDPAssociation(ctx, conn)
+		}
+		return
+	}
+	target := request.Target
 
 	slog.Info("inbound/mio: inbound connection from " + from)
 	slog.Info("inbound/mio: inbound connection to " + target)
@@ -30,17 +40,11 @@ func (s *Server) proxy(ctx context.Context, conn net.Conn) {
 	remote, err := dialer.DialContext(ctx, "tcp", target)
 	if err != nil {
 		slog.Error("outbound/direct: open connection to "+target, "err", err)
-		if p, ok := conn.(interface{ SetNextPadding(int, int) }); ok {
-			p.SetNextPadding(16, 512)
-		}
 		protocol.WriteReply(conn, false)
 		return
 	}
 	defer remote.Close()
 
-	if p, ok := conn.(interface{ SetNextPadding(int, int) }); ok {
-		p.SetNextPadding(16, 512)
-	}
 	if err := protocol.WriteReply(conn, true); err != nil {
 		return
 	}

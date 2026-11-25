@@ -95,7 +95,7 @@ func (st *stream) wait(ch, creditReady <-chan struct{}, deadline time.Time) erro
 
 func (st *stream) receive(payload []byte) error {
 	st.mu.Lock()
-	if st.closed {
+	if st.closed || st.recvClosed || st.reset {
 		st.mu.Unlock()
 		st.sess.releaseReceiveCredit(len(payload))
 		return nil

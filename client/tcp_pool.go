@@ -60,14 +60,14 @@ func (p *tcpPool) close() {
 }
 
 // dial 在一条可用的连接上请求服务端连接 target；连接在途中断开时换一条新的再试一次。
-func (p *tcpPool) dial(ctx context.Context, target string) (conn net.Conn, err error) {
+func (p *tcpPool) dial(ctx context.Context, request protocol.StreamRequest) (conn net.Conn, err error) {
 	for attempt := 0; attempt < 2; {
 		var session *protocol.Session
 		session, err = p.session(ctx)
 		if err != nil {
 			return nil, err
 		}
-		conn, err = session.Dial(ctx, target)
+		conn, err = session.DialRequest(ctx, request)
 		if errors.Is(err, protocol.ErrStreamLimit) {
 			continue
 		}

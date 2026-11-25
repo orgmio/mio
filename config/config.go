@@ -25,6 +25,7 @@ type Inbound struct {
 	Dest       string `toml:"dest"`
 	DestPort   int    `toml:"dest_port"` // 选填，0 表示与 ListenPort 相同
 	PrivateKey string `toml:"private_key"`
+	UDP        *bool  `toml:"udp"` // 选填，nil 表示启用 QUIC
 }
 
 type Log struct {
@@ -38,11 +39,13 @@ type Log struct {
 type Outbound struct {
 	SocksListen     string `toml:"socks_listen"`
 	SocksListenPort int    `toml:"socks_listen_port"`
+	Socks5UDP       bool   `toml:"socks5_udp"`
 	Server          string `toml:"server"`
 	ServerPort      int    `toml:"server_port"`
 	Dest            string `toml:"dest"`
 	DestPort        int    `toml:"dest_port"` // 选填，客户端不使用，只是允许两端的配置写法一致
 	PublicKey       string `toml:"public_key"`
+	UDP             *bool  `toml:"udp"` // 选填，nil 表示启用 QUIC
 }
 
 func Load(path string) (Config, error) {

@@ -10,13 +10,39 @@ import (
 )
 
 const (
-	addrIPv4   = 1
-	addrDomain = 3
-	addrIPv6   = 4
+	udpAssociate = 0
+	addrIPv4     = 1
+	addrDomain   = 3
+	addrIPv6     = 4
 
 	replyOK   byte = 0
 	replyFail byte = 1
 )
+
+// StreamRequest opens a TCP target or a UDP association on an authenticated stream.
+type StreamRequest struct {
+	Target       string
+	UDPAssociate bool
+}
+
+func (r StreamRequest) Write(w io.Writer) error {
+	if r.UDPAssociate {
+		return writeAll(w, []byte{udpAssociate})
+	}
+	return WriteRequest(w, r.Target)
+}
+
+func ReadStreamRequest(r io.Reader) (StreamRequest, error) {
+	var kind [1]byte
+	if _, err := io.ReadFull(r, kind[:]); err != nil {
+		return StreamRequest{}, err
+	}
+	if kind[0] == udpAssociate {
+		return StreamRequest{UDPAssociate: true}, nil
+	}
+	target, err := readTarget(r, kind[0])
+	return StreamRequest{Target: target}, err
+}
 
 // WriteRequest 发送目标地址，格式为 [类型][地址][端口]，在加密连接上一次写出。
 func WriteRequest(w io.Writer, target string) error {
@@ -43,8 +69,7 @@ func WriteRequest(w io.Writer, target string) error {
 		buf = append([]byte{addrDomain, byte(len(host))}, host...)
 	}
 	buf = binary.BigEndian.AppendUint16(buf, uint16(port))
-	_, err = w.Write(buf)
-	return err
+	return writeAll(w, buf)
 }
 
 // ReadRequest 读取客户端发来的目标地址，返回 host:port。
@@ -53,12 +78,15 @@ func ReadRequest(r io.Reader) (string, error) {
 	if _, err := io.ReadFull(r, kind[:]); err != nil {
 		return "", err
 	}
+	return readTarget(r, kind[0])
+}
 
+func readTarget(r io.Reader, kind byte) (string, error) {
 	var host string
-	switch kind[0] {
+	switch kind {
 	case addrIPv4, addrIPv6:
 		ip := make([]byte, 4)
-		if kind[0] == addrIPv6 {
+		if kind == addrIPv6 {
 			ip = make([]byte, 16)
 		}
 		if _, err := io.ReadFull(r, ip); err != nil {
@@ -79,7 +107,7 @@ func ReadRequest(r io.Reader) (string, error) {
 		}
 		host = string(name)
 	default:
-		return "", fmt.Errorf("unknown address type %d", kind[0])
+		return "", fmt.Errorf("unknown address type %d", kind)
 	}
 
 	var port [2]byte

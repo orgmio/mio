@@ -30,9 +30,14 @@ const (
 	// MaxFramePayload 是一个帧的负载上限，正好填满一条最大的记录。
 	MaxFramePayload = maxRecordBody - 16 - FrameHeaderSize
 
+	// maxRecordsPerKey 限制每个方向的 AES-GCM 调用次数，远早于序号回绕。
+	maxRecordsPerKey = 1 << 24
+
 	// StreamWindow 是每条流、每个方向的初始接收窗口：未被 window 帧追加额度前，对端最多发送这么多字节的 data 负载。
 	StreamWindow = 16 << 20
 )
+
+var errRecordLimit = errors.New("mio record key usage limit reached")
 
 // framePadding 是每个帧的填充长度，limit 为本帧能容纳的最大填充长度：
 // ready 帧填充 0–1024 字节；每条流的前 8 个 data 帧中，负载不足 900 字节的补到 900–1400 字节，其余填充 0–255 字节；之后不再填充。
@@ -81,6 +86,10 @@ const sessionWriteTimeout = 10 * time.Second
 
 // writeFrameLocked requires the session write slot and an installed socket deadline.
 func (s *Session) writeFrameLocked(typ byte, id uint32, payload []byte, padLength int) error {
+	if s.sendSeq >= maxRecordsPerKey {
+		s.closeWithError(errRecordLimit)
+		return errRecordLimit
+	}
 	if len(payload) > MaxFramePayload {
 		return errors.New("frame payload too large")
 	}
@@ -132,6 +141,9 @@ func (s *Session) readFrame(skipForeign bool) (typ byte, id uint32, payload []by
 	for {
 		if _, err := io.ReadFull(s.reader, header[:]); err != nil {
 			return 0, 0, nil, err
+		}
+		if s.recvSeq >= maxRecordsPerKey {
+			return 0, 0, nil, errRecordLimit
 		}
 		if !tlsrecord.ValidHeader(header[:]) {
 			return 0, 0, nil, errors.New("invalid record header")

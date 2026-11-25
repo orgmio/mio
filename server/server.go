@@ -47,7 +47,7 @@ func (s *Server) Run(ctx context.Context) error {
 	return s.Serve(ctx)
 }
 
-// Start 开始监听 TCP 和 UDP。TCP 监听失败会返回错误；UDP（QUIC）监听失败只记一条警告，服务端仍可只用 TCP 工作。
+// Start 开始监听 TCP，并在启用 QUIC 时监听 UDP。UDP 监听失败只记一条警告。
 func (s *Server) Start(ctx context.Context) error {
 	address := net.JoinHostPort(s.cfg.Listen, strconv.Itoa(s.cfg.ListenPort))
 	listener, err := net.Listen("tcp", address)
@@ -57,6 +57,9 @@ func (s *Server) Start(ctx context.Context) error {
 	s.listener = listener
 	slog.Info("inbound/mio: tcp server started at " + listener.Addr().String())
 
+	if s.cfg.UDP != nil && !*s.cfg.UDP {
+		return nil
+	}
 	serveQUIC, err := s.startQUIC(ctx)
 	if err != nil {
 		slog.Warn("inbound/mio: quic disabled", "err", err)

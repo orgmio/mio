@@ -61,6 +61,11 @@ func DialSession(ctx context.Context, peer Peer) (_ *Session, err error) {
 
 // Dial 在会话上打开一条流，请求服务端连接 target（host:port）。服务端连不上目标时返回 ErrConnectFailed，会话仍可继续使用。
 func (s *Session) Dial(ctx context.Context, target string) (net.Conn, error) {
+	return s.DialRequest(ctx, StreamRequest{Target: target})
+}
+
+// DialRequest opens a stream and waits for the server to accept the request.
+func (s *Session) DialRequest(ctx context.Context, request StreamRequest) (net.Conn, error) {
 	address := s.RemoteAddr().String()
 	conn, err := s.Open()
 	if err != nil {
@@ -75,7 +80,7 @@ func (s *Session) Dial(ctx context.Context, target string) (net.Conn, error) {
 
 	conn.(*stream).SetNextPadding(16, 512)
 	started := time.Now()
-	if err := WriteRequest(conn, target); err != nil {
+	if err := request.Write(conn); err != nil {
 		conn.Close()
 		return nil, fmt.Errorf("peer %s: send request: %w", address, err)
 	}

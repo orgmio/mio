@@ -180,7 +180,7 @@ func (s *quicSession) authenticate(parent context.Context, server *ecdh.PublicKe
 	return nil
 }
 
-func (s *quicSession) dialStream(ctx context.Context, target string) (net.Conn, error) {
+func (s *quicSession) dialStream(ctx context.Context, request protocol.StreamRequest) (net.Conn, error) {
 	stream, err := s.conn.OpenStreamSync(ctx)
 	if err != nil {
 		return nil, err
@@ -196,7 +196,7 @@ func (s *quicSession) dialStream(ctx context.Context, target string) (net.Conn, 
 		deadline = limit
 	}
 	conn.SetDeadline(deadline)
-	err = protocol.WriteRequest(conn, target)
+	err = request.Write(conn)
 	if err == nil {
 		err = protocol.ReadReply(conn)
 	}
