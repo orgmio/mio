@@ -23,7 +23,7 @@ const (
 
 // markerKey 由服务端公钥派生：不知道公钥就造不出、也验证不了标记，而公钥是 256 位随机值，无法离线猜测。
 func markerKey(server *ecdh.PublicKey) []byte {
-	key, err := hkdf.Key(sha256.New, server.Bytes(), nil, "mio quic marker "+protocol.Version, 32)
+	key, err := hkdf.Key(sha256.New, server.Bytes(), nil, "mio quic marker "+protocol.KDFVersion(), 32)
 	if err != nil {
 		panic(err) // 只会因长度参数非法而失败，这里是常量
 	}

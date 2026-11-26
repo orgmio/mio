@@ -26,7 +26,7 @@ const (
 
 // authKey 由临时公钥与服务端静态密钥的 X25519 共享密钥、TLS 导出密钥派生，绑定到这条 QUIC 连接。
 func authKey(shared, exporter []byte) ([]byte, error) {
-	return hkdf.Key(sha256.New, shared, exporter, "mio quic auth "+protocol.Version, 32)
+	return hkdf.Key(sha256.New, shared, exporter, "mio quic auth "+protocol.KDFVersion(), 32)
 }
 
 func proof(key []byte, label string) []byte {

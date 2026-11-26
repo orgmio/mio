@@ -15,10 +15,10 @@ import (
 	"github.com/orgmio/mio/protocol/padding"
 )
 
-// authLabel 带上完整版本号：版本不同的两端算出的密钥不同，认证必然失败。
-const authLabel = "mio auth " + Version
+// authLabel 只绑定协议主版本，同一主版本的实现使用相同标签。
+var authLabel = "mio auth " + KDFVersion()
 
-// authAEAD 的密钥由共享密钥、版本号和双方 random 派生；server_random 由真站给出，换一条连接就无法重放。
+// authAEAD 的密钥由共享密钥、主版本标签和双方 random 派生；server_random 由真站给出，换一条连接就无法重放。
 func authAEAD(shared, clientRandom, serverRandom []byte) (cipher.AEAD, error) {
 	salt := append(append([]byte{}, clientRandom...), serverRandom...)
 	key, err := hkdf.Key(sha256.New, shared, salt, authLabel, 32)

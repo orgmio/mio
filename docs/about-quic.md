@@ -10,3 +10,15 @@ mio 的 SOCKS5 入口默认接受 TCP CONNECT。在客户端的 `[outbounds]` �
 
 UDP 数据报在 mio 隧道内通过可靠有序的流传输。代理 HTTP/3 等基于 UDP 的应用时，
 隧道内重传可能增加后续数据报的延迟。
+
+# 不建议在quic隧道里面传输quic数据
+
+mio默认禁止向socks5隧道中发送UDP数据，原因和hysteria2一致， 
+在QUIC里面套QUIC会导致Hysteria2自己的流控无法识别从而出现性能问题。 
+mio引用了hysteria2的QUIC部分，所以同理。
+
+目前市面上所有网站均采用，默认情况下走TCP连接，
+在TCP发送一串特定标头向浏览器通知自己支持QUIC后
+浏览器再尝试升级到QUIC，
+而且在不支持的情况下会继续走TCP。 
+所以禁用QUIC对使用没有任何问题。

@@ -106,7 +106,7 @@ func Handshake(ctx context.Context, raw net.Conn, peer Peer) (*Session, error) {
 	}
 	reply, err := secure.waitReady()
 	if err != nil {
-		return nil, fmt.Errorf("no ready from server (wrong public key, or server is not running mio protocol %s): %w", Version, err)
+		return nil, fmt.Errorf("no ready from server (wrong public key, or incompatible with local mio protocol %s): %w", Version, err)
 	}
 	secret, err := keys.finish(reply)
 	if err != nil {
