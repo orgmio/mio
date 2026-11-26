@@ -12,13 +12,13 @@ import (
 	"time"
 )
 
-// MaxSessionStreams limits the number of concurrent streams on a TCP session.
+// MaxSessionStreams 限制单个 TCP 会话中的并发流数量。
 const MaxSessionStreams = 100
 
 // ErrSessionClosed 表示会话已经关闭，不能再打开或接受流。
 var ErrSessionClosed = errors.New("session closed")
 
-// ErrStreamLimit indicates that the session already has MaxSessionStreams streams.
+// ErrStreamLimit 表示会话中的流数量已达到 MaxSessionStreams。
 var ErrStreamLimit = errors.New("session stream limit reached")
 
 // Session 是一条 mio 加密连接：每个帧封装为一条 TLS Application Data 记录，用 AES-256-GCM 加密，
@@ -134,7 +134,7 @@ func (s *Session) Close() error {
 	return nil
 }
 
-// Done 返回的 channel 在会话关闭后关闭。
+// Done 返回的通道 在会话关闭后关闭。
 func (s *Session) Done() <-chan struct{} { return s.done }
 
 // NumStreams 返回当前打开着的流的数量。

@@ -12,12 +12,12 @@ const (
 	maxBurstPacingDelayMultiplier = 4
 )
 
-// Pacer 实现令牌桶 pacing 算法。
+// Pacer 实现基于令牌桶的发送节奏控制算法。
 type Pacer struct {
 	budgetAtLastSent congestion.ByteCount
 	maxDatagramSize  congestion.ByteCount
 	lastSentTime     monotime.Time
-	getBandwidth     func() congestion.ByteCount // 单位为 bytes/s
+	getBandwidth     func() congestion.ByteCount // 单位为字节每秒
 }
 
 func NewPacer(getBandwidth func() congestion.ByteCount) *Pacer {

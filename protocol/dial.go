@@ -64,8 +64,18 @@ func (s *Session) Dial(ctx context.Context, target string) (net.Conn, error) {
 	return s.DialRequest(ctx, StreamRequest{Target: target})
 }
 
-// DialRequest opens a stream and waits for the server to accept the request.
+// DialRequest 打开一条流，并等待服务端接受请求。
 func (s *Session) DialRequest(ctx context.Context, request StreamRequest) (net.Conn, error) {
+	return s.dialRequest(ctx, request, false)
+}
+
+// DialEarly 打开一条连接 TCP 目标的流，无需等待应答即可返回。
+// 调用方须先确认对端支持提前发送，并在读取应用数据前读完应答。
+func (s *Session) DialEarly(ctx context.Context, target string) (net.Conn, error) {
+	return s.dialRequest(ctx, StreamRequest{Target: target}, true)
+}
+
+func (s *Session) dialRequest(ctx context.Context, request StreamRequest, early bool) (net.Conn, error) {
 	address := s.RemoteAddr().String()
 	conn, err := s.Open()
 	if err != nil {
@@ -84,6 +94,13 @@ func (s *Session) DialRequest(ctx context.Context, request StreamRequest) (net.C
 		conn.Close()
 		return nil, fmt.Errorf("peer %s: send request: %w", address, err)
 	}
+	if early {
+		if !stop() || ctx.Err() != nil {
+			conn.Close()
+			return nil, ctx.Err()
+		}
+		return conn, nil
+	}
 	conn.SetReadDeadline(time.Now().Add(replyTimeout))
 	if err := ReadReply(conn); err != nil {
 		conn.Close()
@@ -92,7 +109,7 @@ func (s *Session) DialRequest(ctx context.Context, request StreamRequest) (net.C
 		}
 		// 服务端总会在 replyTimeout 之内应答。等到超时，而且这段时间整条连接上什么都没收到，
 		// 说明连接已经悄悄断了（换了网络、休眠后唤醒），关掉它，免得后面的请求继续往上面发。
-		if errors.Is(err, os.ErrDeadlineExceeded) && s.lastRecv.Load() < started.UnixNano() {
+		if !request.ProbeEarlyTCP && errors.Is(err, os.ErrDeadlineExceeded) && s.lastRecv.Load() < started.UnixNano() {
 			s.closeWithError(errors.New("no response from peer"))
 		}
 		return nil, fmt.Errorf("peer %s: %w", address, err)

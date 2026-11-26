@@ -86,7 +86,7 @@ func relayUDPReplies(ctx context.Context, cancel context.CancelFunc, tunnel net.
 		return
 	}
 
-	// One extra byte lets us discard truncated or oversized replies.
+	// 多预留 1 个字节，以便识别并丢弃被截断或超长的应答。
 	reply := make([]byte, protocol.MaxDatagramSize+1)
 	headerSize := copy(reply, source.Bytes())
 	for {

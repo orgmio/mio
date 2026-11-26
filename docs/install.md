@@ -89,7 +89,7 @@ install -o root -g mio -m 0640 ./config.toml /etc/mio/config.toml
 # Required-Stop:     $remote_fs $network
 # Default-Start:     2 3 4 5
 # Default-Stop:      0 1 6
-# Short-Description: mio proxy service
+# Short-Description: mio 代理服务
 ### END INIT INFO
 
 PATH=/usr/sbin:/usr/bin:/sbin:/bin

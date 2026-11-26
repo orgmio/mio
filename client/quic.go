@@ -32,6 +32,7 @@ type quicSession struct {
 	transport *quic.Transport
 	udp       *net.UDPConn
 	closeOnce sync.Once
+	early     earlySupport
 }
 
 // emptyConnID 让客户端使用零长度源连接 ID，与 Chrome 一致。
@@ -139,7 +140,7 @@ func dialQUIC(ctx context.Context, peer protocol.Peer) (_ *quicSession, err erro
 	return session, nil
 }
 
-// authenticate 在首个 stream 上交换绑定 TLS 导出密钥的 HMAC，服务端证明持有私钥，客户端证明知道公钥。
+// authenticate 在首条流 上交换绑定 TLS 导出密钥的 HMAC，服务端证明持有私钥，客户端证明知道公钥。
 func (s *quicSession) authenticate(parent context.Context, server *ecdh.PublicKey) error {
 	state := s.conn.ConnectionState()
 	exporter, err := state.TLS.ExportKeyingMaterial(quicauth.ExporterLabel, nil, 32)
@@ -181,7 +182,17 @@ func (s *quicSession) authenticate(parent context.Context, server *ecdh.PublicKe
 }
 
 func (s *quicSession) dialStream(ctx context.Context, request protocol.StreamRequest) (net.Conn, error) {
-	stream, err := s.conn.OpenStreamSync(ctx)
+	return s.openStream(ctx, request, false)
+}
+
+func (s *quicSession) openStream(ctx context.Context, request protocol.StreamRequest, early bool) (net.Conn, error) {
+	var stream *quic.Stream
+	var err error
+	if early {
+		stream, err = s.conn.OpenStream()
+	} else {
+		stream, err = s.conn.OpenStreamSync(ctx)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -197,7 +208,7 @@ func (s *quicSession) dialStream(ctx context.Context, request protocol.StreamReq
 	}
 	conn.SetDeadline(deadline)
 	err = request.Write(conn)
-	if err == nil {
+	if err == nil && !early {
 		err = protocol.ReadReply(conn)
 	}
 	if !stop() || ctx.Err() != nil {

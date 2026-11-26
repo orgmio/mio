@@ -16,17 +16,17 @@ const (
 
 type roundTripCount uint64
 
-// SendTimeState 是 ConnectionStateOnSentPacket 的一个子集，在数据包得到 ack 或丢失时返回给调用方。
+// SendTimeState 是 ConnectionStateOnSentPacket 的一个子集，在数据包得到确认或丢失时返回给调用方。
 type sendTimeState struct {
 	// 此对象中的其他状态是否有效。
 	isValid bool
-	// 发送数据包时，发送端是否受应用数据量限制（app-limited）。
-	// 由于发送端没有足够的数据来填满链路，app-limited 带宽样本可能会人为偏低。
+	// 发送数据包时，发送端是否受应用数据量限制。
+	// 由于发送端没有足够的数据来填满链路，受应用数据量限制的带宽样本可能会人为偏低。
 	isAppLimited bool
 	// 发送该数据包时已发送的总字节数。
 	// 包含该数据包本身。
 	totalBytesSent congestion.ByteCount
-	// 发送该数据包时已得到 ack 的总字节数。
+	// 发送该数据包时已得到确认的总字节数。
 	totalBytesAcked congestion.ByteCount
 	// 发送该数据包时已丢失的总字节数。
 	totalBytesLost congestion.ByteCount
@@ -54,10 +54,10 @@ func newSendTimeState(
 }
 
 type extraAckedEvent struct {
-	// 此事件对应时间间隔内超额 ack 的字节数。
+	// 此事件对应时间间隔内超额确认的字节数。
 	extraAcked congestion.ByteCount
 
-	// 此事件中得到 ack 的字节数及其时间间隔。
+	// 此事件中得到确认的字节数及其时间间隔。
 	bytesAcked congestion.ByteCount
 	timeDelta  time.Duration
 	// 此事件所属的往返轮次。
@@ -77,9 +77,9 @@ func maxExtraAckedEventFunc(a, b extraAckedEvent) int {
 type bandwidthSample struct {
 	// 此样本对应的带宽；没有有效带宽样本时为零。
 	bandwidth Bandwidth
-	// 此样本对应的 RTT 测量值；没有 RTT 样本时为零。未对延迟 ack 时间进行校正。
+	// 此样本对应的 RTT 测量值；没有 RTT 样本时为零。未对延迟确认时间进行校正。
 	rtt time.Duration
-	// |send_rate| 根据当前被 ack 的数据包（'P'）以及 P 发送前已被 ack 的较早数据包计算。
+	// |send_rate| 根据当前被确认的数据包（'P'）以及 P 发送前已被确认的较早数据包计算。
 	sendRate Bandwidth
 	// 发送数据包时捕获的状态。
 	stateAtSend sendTimeState
@@ -91,16 +91,16 @@ func newBandwidthSample() *bandwidthSample {
 	}
 }
 
-// MaxAckHeightTracker 是 BandwidthSampler 的一部分，在每次 ack 事件后调用，用于跟踪 ack 聚合程度（即“ack height”）。
+// MaxAckHeightTracker 是 BandwidthSampler 的一部分，在每次确认事件后调用，用于跟踪确认聚合程度。
 type maxAckHeightTracker struct {
-	// 跟踪 ack 速度超过估计带宽时，超额 ack 的最大字节数。
+	// 跟踪确认速率超过估计带宽时，超额确认的最大字节数。
 	maxAckHeightFilter *WindowedFilter[extraAckedEvent, roundTripCount]
-	// 此次聚合的开始时间以及期间 ack 的字节数。
+	// 此次聚合的开始时间以及期间确认的字节数。
 	aggregationEpochStartTime monotime.Time
 	aggregationEpochBytes     congestion.ByteCount
 	// 当前聚合周期开始前最后发送的数据包编号。
 	lastSentPacketNumberBeforeEpoch congestion.PacketNumber
-	// 已开始的 ack 聚合周期数，包括当前周期。仅用于统计。
+	// 已开始的确认聚合周期数，包括当前周期。仅用于统计。
 	numAckAggregationEpochs                uint64
 	ackAggregationBandwidthThreshold       float64
 	startNewAggregationEpochAfterFullRound bool
@@ -155,7 +155,7 @@ func (m *maxAckHeightTracker) Update(
 		}
 	}
 
-	// 如果本周期开始后发送的任意数据包已得到 ack，则开始一个新周期。
+	// 如果本周期开始后发送的任意数据包已得到确认，则开始一个新周期。
 	if m.startNewAggregationEpochAfterFullRound &&
 		m.lastSentPacketNumberBeforeEpoch != invalidPacketNumber &&
 		lastAckedPacketNumber != invalidPacketNumber &&
@@ -173,7 +173,7 @@ func (m *maxAckHeightTracker) Update(
 	// 假设最大带宽估计正确，计算预期交付的字节数。
 	aggregationDelta := ackTime.Sub(m.aggregationEpochStartTime)
 	expectedBytesAcked := bytesFromBandwidthAndTimeDelta(bandwidthEstimate, aggregationDelta)
-	// ack 到达速率小于或等于最大带宽时，立即重置当前聚合周期。
+	// 确认到达速率小于或等于最大带宽时，立即重置当前聚合周期。
 	if m.aggregationEpochBytes <= congestion.ByteCount(m.ackAggregationBandwidthThreshold*float64(expectedBytesAcked)) {
 		// 重置并开始测量新的聚合周期。
 		m.aggregationEpochBytes = bytesAcked
@@ -228,13 +228,13 @@ func (m *maxAckHeightTracker) NumAckAggregationEpochs() uint64 {
 	return m.numAckAggregationEpochs
 }
 
-// AckPoint 表示 ack 曲线上的一个点。
+// AckPoint 表示确认曲线上的一个点。
 type ackPoint struct {
 	ackTime         monotime.Time
 	totalBytesAcked congestion.ByteCount
 }
 
-// RecentAckPoints 保存时间不同的最近两个 ack 点。
+// RecentAckPoints 保存时间不同的最近两个确认点。
 type recentAckPoints struct {
 	ackPoints [2]ackPoint
 }
@@ -268,7 +268,7 @@ func (r *recentAckPoints) LessRecentPoint() *ackPoint {
 }
 
 // ConnectionStateOnSentPacket 表示已发送数据包的信息，以及发送该数据包时的连接状态，
-// 特别是当时最近一个已 ack 数据包的相关信息。
+// 特别是当时最近一个已确认的数据包的相关信息。
 type connectionStateOnSentPacket struct {
 	// 数据包的发送时间。
 	sentTime monotime.Time
@@ -280,7 +280,7 @@ type connectionStateOnSentPacket struct {
 	lastAckedPacketSentTime monotime.Time
 	// 发送该数据包时 |lastAckedPacketAckTime| 的值。
 	lastAckedPacketAckTime monotime.Time
-	// 数据包得到 ack 或丢失时返回给拥塞控制器的发送时状态。
+	// 数据包得到确认或丢失时返回给拥塞控制器的发送时状态。
 	sendTimeState sendTimeState
 }
 
@@ -324,29 +324,29 @@ func newConnectionStateOnSentPacket(
 // 数据包得到确认时（A_1），不仅能获知该数据包自身的发送时间（S_1），还可获知它发送前最近一个
 // 已确认数据包的信息（S_0 和 A_0）。
 //
-// 根据这些数据，发送速率和 ack 速率估算如下：
+// 根据这些数据，发送速率和确认速率估算如下：
 //
 //	send_rate = (bytes(S_1) - bytes(S_0)) / (time(S_1) - time(S_0))
 //	ack_rate = (bytes(A_1) - bytes(A_0)) / (time(A_1) - time(A_0))
 //
-// 直观来说，ack 速率就是我们希望作为带宽的速率。不过在某些情况下（例如 ack compression），
-// 某个时点的 ack 速率可能高于数据最初的发送速率，这并不能反映真实带宽。因此我们以发送速率作为上界，
+// 直观来说，确认速率就是我们希望作为带宽的速率。不过在某些情况下（例如确认压缩），
+// 某个时点的确认速率可能高于数据最初的发送速率，这并不能反映真实带宽。因此我们以发送速率作为上界，
 // 样本值为
 //
 //	rate_sample = min(send_rate, ack_rate)
 //
-// 采样器处理的一个重要边界情况是跟踪 app-limited 样本。“app-limited”有多种含义，且常被混用，
+// 采样器处理的一个重要边界情况是跟踪受应用数据量限制的样本。“受应用数据量限制”有多种含义，且常被混用，
 // 因此需要理解并区分这些含义。
 //
-// 含义 1：连接状态。没有待发送数据时，称连接受应用数据量限制（app-limited）。这意味着之后某些带宽样本
-// 无法准确反映链路容量，因此需要将此情况告知使用方。连接进入 app-limited 状态时，会通过 OnAppLimited()
+// 含义 1：连接状态。没有待发送数据时，称连接受应用数据量限制。这意味着之后某些带宽样本
+// 无法准确反映链路容量，因此需要将此情况告知使用方。连接进入应用数据量受限状态时，会通过 OnAppLimited()
 // 方法通知采样器。
 //
-// 含义 2：带宽采样器中的一个阶段。采样器收到连接处于 app-limited 状态的通知后，便进入 app-limited 阶段。
-// 在此阶段，所有*发送的*数据包都会标记为 app-limited。请注意，采样器处于 app-limited 阶段时，连接本身
-// 不一定处于 app-limited 状态，实际上通常并非如此（否则它如何发送数据包？）。下面的布尔标志表示采样器是否处于该阶段。
+// 含义 2：带宽采样器中的一个阶段。采样器收到连接处于应用数据量受限状态的通知后，便进入应用数据量受限阶段。
+// 在此阶段，所有*发送的*数据包都会标记为受应用数据量限制。请注意，采样器处于应用数据量受限阶段时，连接本身
+// 不一定处于应用数据量受限状态，实际上通常并非如此（否则它如何发送数据包？）。下面的布尔标志表示采样器是否处于该阶段。
 //
-// 含义 3：已发送数据包和样本上的一个标志。如果数据包在 app-limited 阶段发送，与该数据包关联的样本也会标记为 app-limited。
+// 含义 3：已发送数据包和样本上的一个标志。如果数据包在应用数据量受限阶段发送，与该数据包关联的样本也会标记为受应用数据量限制。
 //
 // 明确这些术语后，接下来看看它要处理哪类情况。
 //
@@ -355,26 +355,26 @@ func newConnectionStateOnSentPacket(
 // 用于计算斜率的 S_0/A_0 会是数据包 20，与当前数据包相隔数秒，因此得到的估计值会极低且毫无代表性。
 // 直到数据包 41，S_0/A_0 才会变为 21，这意味着带宽样本将排除这段静默期。
 //
-// 基于上述场景，我们实现了以下规则：调用 OnAppLimited() 后，所有已发送数据包都会生成 app-limited 样本，
-// 直到某个在 OnAppLimited() 调用后发送的数据包得到 ack 为止。请注意，连接处于 app-limited 状态的场景并不只有上述一种，
+// 基于上述场景，我们实现了以下规则：调用 OnAppLimited() 后，所有已发送数据包都会生成受应用数据量限制的样本，
+// 直到某个在 OnAppLimited() 调用后发送的数据包得到确认为止。请注意，连接处于应用数据量受限状态的场景并不只有上述一种，
 // 但此方法同样适用于其他情况。
 
 type congestionEventSample struct {
-	// 所有已 ack 数据包中的最大带宽样本。
+	// 所有已确认的数据包中的最大带宽样本。
 	// 没有样本时为 QuicBandwidth::Zero()。
 	sampleMaxBandwidth Bandwidth
-	// |sample_max_bandwidth| 是否来自 app-limited 样本。
+	// |sample_max_bandwidth| 是否来自受应用数据量限制的样本。
 	sampleIsAppLimited bool
-	// 所有已 ack 数据包中的最小 RTT 样本。
+	// 所有已确认的数据包中的最小 RTT 样本。
 	// 没有样本时为 QuicTime::Delta::Infinite()。
 	sampleRtt time.Duration
-	// 对已 ack 的每个数据包 p，此值为 INFLIGHT(p) 的最大值；
-	// 其中 INFLIGHT(p) 是 p 处于在途状态期间得到 ack 的字节数。
+	// 对已确认的每个数据包 p，此值为 INFLIGHT(p) 的最大值；
+	// 其中 INFLIGHT(p) 是 p 处于在途状态期间得到确认的字节数。
 	sampleMaxInflight congestion.ByteCount
 	// acked_packets 非空时，取其中最大数据包的发送状态；如果 acked_packets 为空，
 	// 则取 lost_packets 中最大数据包的发送状态。
 	lastPacketSendState sendTimeState
-	// 此 ack 事件中相对于流带宽预期值额外得到 ack 的字节数。该值越大，表示 ack 聚合程度越高。
+	// 此确认事件中相对于流带宽预期值额外得到确认的字节数。该值越大，表示确认聚合程度越高。
 	extraAcked congestion.ByteCount
 }
 
@@ -409,13 +409,13 @@ type bandwidthSampler struct {
 	// 最近发送的数据包。
 	lastSentPacket congestion.PacketNumber
 
-	// 最近得到 ack 的数据包。
+	// 最近得到确认的数据包。
 	lastAckedPacket congestion.PacketNumber
 
-	// 指示带宽采样器当前是否处于 app-limited 阶段。
+	// 指示带宽采样器当前是否处于应用数据量受限阶段。
 	isAppLimited bool
 
-	// 此数据包之后得到确认的数据包将使采样器退出 app-limited 阶段。
+	// 此数据包之后得到确认的数据包将使采样器退出应用数据量受限阶段。
 	endOfAppLimitedPhase congestion.PacketNumber
 
 	// 按数据包编号索引的连接状态记录，保存每个在途数据包发送时的状态。
@@ -520,7 +520,7 @@ func (b *bandwidthSampler) OnPacketSent(
 		}
 		b.totalBytesSentAtLastAckedPacket = b.totalBytesSent
 
-		// 此时无需担心 ack compression，因此将发送速率设为实际上无穷大。
+		// 此时无需担心确认压缩，因此将发送速率设为实际上无穷大。
 		b.lastAckedPacketSentTime = sentTime
 	}
 
@@ -629,9 +629,9 @@ func (b *bandwidthSampler) OnAppLimited() {
 }
 
 func (b *bandwidthSampler) RemoveObsoletePackets(leastUnacked congestion.PacketNumber) {
-	// 数据包在得到 ack 或被标记为丢失之前，可能就已从 QuicUnackedPacketMap 的在途记录中移除，从而变为过时。
+	// 数据包在得到确认或被标记为丢失之前，可能就已从 QuicUnackedPacketMap 的在途记录中移除，从而变为过时。
 	// 例如，QuicSentPacketManager::RetransmitCryptoPackets 重传 crypto 数据包时，该数据包会从
-	// QuicUnackedPacketMap 的在途记录中移除，但不会在 BandwidthSampler 中标记为已 ack 或丢失。
+	// QuicUnackedPacketMap 的在途记录中移除，但不会在 BandwidthSampler 中标记为已确认或丢失。
 	b.connectionStateMap.RemoveUpTo(leastUnacked)
 }
 
@@ -710,9 +710,9 @@ func (b *bandwidthSampler) onPacketAcknowledged(ackTime monotime.Time, packetNum
 	}
 
 	if b.isAppLimited {
-		// 以下两种情况下退出 app-limited 阶段：
+		// 以下两种情况下退出应用数据量受限阶段：
 		// (1) end_of_app_limited_phase_ 尚未初始化，即此前发送的所有数据包发送时都有缓冲数据或待发送数据。
-		// (2) 当前得到 ack 的数据包晚于标记为 app-limited 阶段结束点的已发送数据包。
+		// (2) 当前得到确认的数据包晚于用来标记应用数据量受限阶段结束的已发送数据包。
 		if b.endOfAppLimitedPhase == invalidPacketNumber ||
 			packetNumber > b.endOfAppLimitedPhase {
 			b.isAppLimited = false
@@ -724,7 +724,7 @@ func (b *bandwidthSampler) onPacketAcknowledged(ackTime monotime.Time, packetNum
 		return *sample
 	}
 
-	// 无穷大的速率表示采样器应丢弃当前发送速率样本，只使用 ack 速率。
+	// 无穷大的速率表示采样器应丢弃当前发送速率样本，只使用确认速率。
 	sendRate := infBandwidth
 	if sentPacketPointer.sentTime.After(sentPacketPointer.lastAckedPacketSentTime) {
 		sendRate = BandwidthFromDelta(
@@ -740,7 +740,7 @@ func (b *bandwidthSampler) onPacketAcknowledged(ackTime monotime.Time, packetNum
 		a0.totalBytesAcked = sentPacketPointer.sendTimeState.totalBytesAcked
 	}
 
-	// 计算斜率时，确保当前数据包的 ack 时间始终晚于前一个数据包的时间，否则可能发生除零或整数下溢。
+	// 计算斜率时，确保当前数据包的确认时间始终晚于前一个数据包的时间，否则可能发生除零或整数下溢。
 	if ackTime.Sub(a0.ackTime) <= 0 {
 		return *sample
 	}
@@ -775,8 +775,8 @@ func (b *bandwidthSampler) onAckEventEnd(
 		b.lastAckedPacketAckTime,
 		newlyAckedBytes,
 	)
-	// 如果 |extra_acked| 为零，即此 ack 事件标志着新的 ack 聚合周期开始，则将 LessRecentPoint
-	//（上一周期最后一个 ack 点）保存为 A0 候选点。
+	// 如果 |extra_acked| 为零，即此确认事件标志着新的确认聚合周期开始，则将 LessRecentPoint
+	//（上一周期最后一个确认点）保存为 A0 候选点。
 	if b.overestimateAvoidance && extraAcked == 0 {
 		b.a0Candidates.PushBack(*b.recentAckPoints.LessRecentPoint())
 	}

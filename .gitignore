@@ -1,7 +1,7 @@
-# If you prefer the allow list template instead of the deny list, see community template:
+# 如果需要使用允许列表，可参考下面的社区模板
 # https://github.com/github/gitignore/blob/main/community/Golang/Go.AllowList.gitignore
 #
-# Binaries for programs and plugins
+# 程序和插件的二进制文件
 mio
 *.exe
 *.exe~
@@ -10,30 +10,30 @@ mio
 *.dylib
 *.log
 
-# Config file
+# 配置文件
 *.toml
 
-# Test binary, built with `go test -c`
+# 由 `go test -c` 生成的测试二进制文件
 *.test
 *_test.go
 
-# Code coverage profiles and other test artifacts
+# 代码覆盖率报告及其他测试产物
 *.out
 coverage.*
 !coverage.go
 *.coverprofile
 profile.cov
 
-# Dependency directories (remove the comment below to include it)
+# 依赖目录（取消下方注释即可忽略该目录）
 # vendor/
 
-# Go workspace file
+# Go 工作区文件
 go.work
 go.work.sum
 
-# env file
+# 环境变量文件
 .env
 
-# Editor/IDE
+# 编辑器和集成开发环境
 .idea/
 .vscode/

@@ -18,7 +18,7 @@ const (
 	// Timeout 是握手后完成认证的时限。
 	Timeout = 5 * time.Second
 
-	// ClientMessageSize 是客户端在首个 stream 上发出的认证消息长度：临时公钥(32) ‖ 客户端证明(32)。
+	// ClientMessageSize 是客户端在首条流 上发出的认证消息长度：临时公钥(32) ‖ 客户端证明(32)。
 	ClientMessageSize = 64
 	// ServerMessageSize 是服务端回复的证明长度。
 	ServerMessageSize = 32

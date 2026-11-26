@@ -15,9 +15,9 @@ const (
 type Bandwidth uint64
 
 const (
-	// BitsPerSecond 表示每秒 1 bit。
+	// BitsPerSecond 表示每秒 1 比特。
 	BitsPerSecond Bandwidth = 1
-	// BytesPerSecond 表示每秒 1 byte。
+	// BytesPerSecond 表示每秒 1 字节。
 	BytesPerSecond = 8 * BitsPerSecond
 )
 

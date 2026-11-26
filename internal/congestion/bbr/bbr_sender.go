@@ -15,9 +15,9 @@ import (
 )
 
 // BbrSender 实现 BBR 拥塞控制算法。BBR 旨在估算当前可用的瓶颈带宽和 RTT（名称由此而来），
-// 并依据这些信号调节 pacing 速率和拥塞窗口大小。
+// 并依据这些信号调节发送速率和拥塞窗口大小。
 //
-// BBR 依赖 pacing 才能正常工作。禁用 pacing 时不要使用 BBR。
+// BBR 依赖发送节奏控制才能正常工作。禁用发送节奏控制时不要使用 BBR。
 //
 
 const (
@@ -56,7 +56,7 @@ type bbrMode int
 const (
 	// 连接的启动阶段。
 	bbrModeStartup = iota
-	// 在启动阶段达到可能的最高带宽后，降低 pacing 速率以排空队列。
+	// 在启动阶段达到可能的最高带宽后，降低发送速率以排空队列。
 	bbrModeDrain
 	// 巡航模式。
 	bbrModeProbeBw
@@ -116,19 +116,19 @@ type bbrSender struct {
 	// |congestion_window_| 可达到的最小值。
 	minCongestionWindow congestion.ByteCount
 
-	// STARTUP 阶段使用的 pacing 增益。
+	// STARTUP 阶段使用的发送速率增益。
 	highGain float64
 
 	// STARTUP 阶段使用的 CWND 增益。
 	highCwndGain float64
 
-	// DRAIN 阶段使用的 pacing 增益。
+	// DRAIN 阶段使用的发送速率增益。
 	drainGain float64
 
-	// 连接当前的 pacing 速率。
+	// 连接当前的发送速率。
 	pacingRate Bandwidth
 
-	// 当前应用于 pacing 速率的增益。
+	// 当前应用于发送速率的增益。
 	pacingGain float64
 	// 当前应用于拥塞窗口的增益。
 	congestionWindowGain float64
@@ -138,9 +138,9 @@ type bbrSender struct {
 	// 保持在 STARTUP 模式的 RTT 数，默认为 3。
 	numStartupRtts int64
 
-	// PROBE_BW 模式下的往返次数，用于确定当前 pacing 增益循环。
+	// PROBE_BW 模式下的往返次数，用于确定当前发送速率增益循环。
 	cycleCurrentOffset int
-	// 上一次 pacing 增益循环的开始时间。
+	// 上一次发送速率增益循环的开始时间。
 	lastCycleStart monotime.Time
 
 	// 指示连接是否已达到满带宽模式。
@@ -158,9 +158,9 @@ type bbrSender struct {
 	// 指示自 PROBE_RTT 激活以来是否已经过一个往返。
 	probeRttRoundPassed bool
 
-	// 指示最近的带宽样本是否标记为 app-limited。
+	// 指示最近的带宽样本是否标记为受应用数据量限制。
 	lastSampleIsAppLimited bool
-	// 指示是否记录过任何非 app-limited 样本。
+	// 指示是否记录过任何未受应用数据量限制的样本。
 	hasNoAppLimitedSample bool
 
 	// 当前恢复状态。
@@ -170,28 +170,28 @@ type bbrSender struct {
 	endRecoveryAt congestion.PacketNumber
 	// 丢包恢复期间用于限制在途字节数的窗口。
 	recoveryWindow congestion.ByteCount
-	// 如果为 true，则将恢复期间的所有样本视为 app-limited。
+	// 如果为 true，则将恢复期间的所有样本视为受应用数据量限制。
 	isAppLimitedRecovery bool // 未使用
 
-	// 为 true 时，以 1.5 倍速率进行 pacing，并在 STARTUP 中禁用 packet conservation。
+	// 为 true 时，按 1.5 倍速率发送，并在 STARTUP 中禁用数据包守恒机制。
 	slowerStartup bool // 未使用
-	// 为 true 时，在 STARTUP 中禁用 packet conservation。
+	// 为 true 时，在 STARTUP 中禁用数据包守恒机制。
 	rateBasedStartup bool // 未使用
 
-	// 为 true 时，在 STARTUP 期间加入最近一次 ack 聚合测量值。
+	// 为 true 时，在 STARTUP 期间加入最近一次确认聚合测量值。
 	enableAckAggregationDuringStartup bool
-	// 为 true 时，若带宽增长超过 25%，则在 STARTUP 期间使窗口化 ack 聚合值过期。
+	// 为 true 时，若带宽增长超过 25%，则在 STARTUP 期间使窗口化确认聚合值过期。
 	expireAckAggregationInStartup bool
 
 	// 为 true 时，只有在 bytes_in_flight 降至 BDP 以下或需要进入高增益模式时，才退出低增益模式。
 	drainToTarget bool
 
-	// 为 true 时，在 STARTUP 检测到超调后降低 pacing 速率。
+	// 为 true 时，在 STARTUP 检测到超调后降低发送速率。
 	detectOvershooting bool
 	// detect_overshooting_ 为 true 期间丢失的字节数。
 	bytesLostWhileDetectingOvershooting congestion.ByteCount
 	// 如果 bytes_lost_while_detecting_overshooting_ *
-	// bytes_lost_multiplier_while_detecting_overshooting_ > IW，则降低 pacing 速率。
+	// bytes_lost_multiplier_while_detecting_overshooting_ > IW，则降低发送速率。
 	bytesLostMultiplierWhileDetectingOvershooting uint8
 	// 检测到超调时，pacing_rate_ 不得降至此值 / min_rtt 以下。
 	cwndToCalculateMinPacingRate congestion.ByteCount
@@ -472,7 +472,7 @@ func (b *bbrSender) OnCongestionEventEx(priorInFlight congestion.ByteCount, even
 	// 计算已确认和丢失的数据包数量。
 	bytesAcked := b.sampler.TotalBytesAcked() - totalBytesAckedBefore
 
-	// 更新模型后，重新计算 pacing 速率和拥塞窗口。
+	// 更新模型后，重新计算发送速率和拥塞窗口。
 	b.calculatePacingRate(bytesLost)
 	b.calculateCongestionWindow(bytesAcked, excessAcked)
 	b.calculateRecoveryWindow(bytesAcked, bytesLost)
@@ -618,13 +618,13 @@ func (b *bbrSender) updateRoundTripCounter(lastAckedPacket congestion.PacketNumb
 func (b *bbrSender) updateGainCyclePhase(now monotime.Time, priorInFlight congestion.ByteCount, hasLosses bool) {
 	// 通常经过一个 RTT 后会推进循环。
 	shouldAdvanceGainCycling := now.After(b.lastCycleStart.Add(b.getMinRtt()))
-	// 如果 pacing 增益大于 1.0，连接会尝试增加在途字节数至至少 pacing_gain * BDP，以探测带宽。
+	// 如果发送速率增益大于 1.0，连接会尝试增加在途字节数至至少 pacing_gain * BDP，以探测带宽。
 	// 只要没有丢包表明缓冲区无法容纳这么多数据，就确保实际达到该目标。
 	if b.pacingGain > 1.0 && !hasLosses && priorInFlight < b.getTargetCongestionWindow(b.pacingGain) {
 		shouldAdvanceGainCycling = false
 	}
 
-	// 如果 pacing 增益小于 1.0，连接会尝试排空此前探测可能产生的额外队列。
+	// 如果发送速率增益小于 1.0，连接会尝试排空此前探测可能产生的额外队列。
 	// 如果在途字节数提前降至估计的 BDP 值，则认为队列已成功排空并提前结束本轮循环。
 	if b.pacingGain < 1.0 && b.bytesInFlight <= b.getTargetCongestionWindow(1) {
 		shouldAdvanceGainCycling = true
@@ -773,7 +773,7 @@ func (b *bbrSender) updateRecoveryState(lastAckedPacket congestion.PacketNumber,
 	}
 }
 
-// 确定连接合适的 pacing 速率。
+// 确定连接合适的发送速率。
 func (b *bbrSender) calculatePacingRate(bytesLost congestion.ByteCount) {
 	if b.bandwidthEstimate() == 0 {
 		return
@@ -785,7 +785,7 @@ func (b *bbrSender) calculatePacingRate(bytesLost congestion.ByteCount) {
 		return
 	}
 
-	// 一旦有 RTT 测量值，就按 initial_window / RTT 的速率进行 pacing。
+	// 一旦有 RTT 测量值，就按 initial_window / RTT 的速率发送。
 	if b.pacingRate == 0 && b.rttStats.MinRTT() != 0 {
 		b.pacingRate = BandwidthFromDelta(b.initialCongestionWindow, b.rttStats.MinRTT())
 		return
@@ -793,12 +793,12 @@ func (b *bbrSender) calculatePacingRate(bytesLost congestion.ByteCount) {
 
 	if b.detectOvershooting {
 		b.bytesLostWhileDetectingOvershooting += bytesLost
-		// 当 pacing 速率 > target_rate 且检测到丢包时，检查调整网络参数后的超调情况。
+		// 当发送速率 > target_rate 且检测到丢包时，检查调整网络参数后的超调情况。
 		if b.pacingRate > targetRate && b.bytesLostWhileDetectingOvershooting > 0 {
 			if b.hasNoAppLimitedSample ||
 				b.bytesLostWhileDetectingOvershooting*congestion.ByteCount(b.bytesLostMultiplierWhileDetectingOvershooting) > b.initialCongestionWindow {
-				// 如果 1) 至少有一个非 app-limited 带宽样本，或 2) 一半 IW 丢失，
-				// 则可以较有把握地认为发生了超调。降低 pacing 速率。
+				// 如果 1) 至少有一个未受应用数据量限制的带宽样本，或 2) 一半 IW 丢失，
+				// 则可以较有把握地认为发生了超调。降低发送速率。
 				b.pacingRate = max(targetRate, BandwidthFromDelta(b.cwndToCalculateMinPacingRate, b.rttStats.MinRTT()))
 				b.bytesLostWhileDetectingOvershooting = 0
 				b.detectOvershooting = false
@@ -806,7 +806,7 @@ func (b *bbrSender) calculatePacingRate(bytesLost congestion.ByteCount) {
 		}
 	}
 
-	// STARTUP 期间不要降低 pacing 速率。
+	// STARTUP 期间不要降低发送速率。
 	b.pacingRate = max(b.pacingRate, targetRate)
 }
 
@@ -818,7 +818,7 @@ func (b *bbrSender) calculateCongestionWindow(bytesAcked, excessAcked congestion
 
 	targetWindow := b.getTargetCongestionWindow(b.congestionWindowGain)
 	if b.isAtFullBandwidth {
-		// 将最近测得的最大 ack 聚合量加入 CWND。
+		// 将最近测得的最大确认聚合量加入 CWND。
 		targetWindow += b.sampler.MaxAckHeight()
 	} else if b.enableAckAggregationDuringStartup {
 		// 加入最近一次确认的超额字节数。由于 STARTUP 中 CWND 不会减小，这会自动形成一个局部最大值滤波器。

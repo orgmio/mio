@@ -10,22 +10,27 @@ import (
 )
 
 const (
-	udpAssociate = 0
-	addrIPv4     = 1
-	addrDomain   = 3
-	addrIPv6     = 4
+	udpAssociate  = 0
+	addrIPv4      = 1
+	probeEarlyTCP = 2
+	addrDomain    = 3
+	addrIPv6      = 4
 
 	replyOK   byte = 0
 	replyFail byte = 1
 )
 
-// StreamRequest opens a TCP target or a UDP association on an authenticated stream.
+// StreamRequest 表示连接 TCP 目标、建立 UDP 关联或探测是否支持提前发送 TCP 数据的请求。
 type StreamRequest struct {
-	Target       string
-	UDPAssociate bool
+	Target        string
+	UDPAssociate  bool
+	ProbeEarlyTCP bool
 }
 
 func (r StreamRequest) Write(w io.Writer) error {
+	if r.ProbeEarlyTCP {
+		return writeAll(w, []byte{probeEarlyTCP})
+	}
 	if r.UDPAssociate {
 		return writeAll(w, []byte{udpAssociate})
 	}
@@ -39,6 +44,9 @@ func ReadStreamRequest(r io.Reader) (StreamRequest, error) {
 	}
 	if kind[0] == udpAssociate {
 		return StreamRequest{UDPAssociate: true}, nil
+	}
+	if kind[0] == probeEarlyTCP {
+		return StreamRequest{ProbeEarlyTCP: true}, nil
 	}
 	target, err := readTarget(r, kind[0])
 	return StreamRequest{Target: target}, err

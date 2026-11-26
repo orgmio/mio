@@ -35,7 +35,7 @@ func authAEAD(shared, clientRandom, serverRandom []byte) (cipher.AEAD, error) {
 // 握手后客户端紧接着发出两条记录，长度上对应浏览器在 HTTP/2 连接开头发出的两条记录：
 // 认证记录对应连接前言与 SETTINGS、WINDOW_UPDATE 帧所在的那条小记录，份额记录对应第一个请求。
 const (
-	// authPlainSize 是认证记录明文的长度，加上 16 字节 tag 后记录体为 87 字节。
+	// authPlainSize 是认证记录明文的长度，加上 16 字节认证标签 后记录体为 87 字节。
 	// 用 Brave 157（Chromium 157）实测，HTTP/2 连接上握手后的第一条记录固定是这个长度。
 	authPlainSize = 71
 	// maxAuthPlain 是服务端接受的认证记录明文长度上限。

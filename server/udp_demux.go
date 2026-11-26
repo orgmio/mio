@@ -25,7 +25,7 @@ const (
 	maxUnknownFlows = 1024
 	// packetSize 是一个数据报缓冲的大小。互联网上的 UDP 数据报不超过 1500 字节左右，quic-go 自己的收包缓冲也只有 1452 字节。
 	packetSize = 2048
-	// oobSize 是控制消息缓冲的大小，与 quic-go 相同，装得下 ECN 和 packet info。
+	// oobSize 是控制消息缓冲的大小，与 quic-go 相同，装得下 ECN 和 数据包信息。
 	oobSize = 128
 	// readBatch 是一次 recvmmsg 最多读取的数据报数。
 	readBatch = 32
@@ -33,7 +33,7 @@ const (
 	destRefresh = 5 * time.Minute
 )
 
-// udpPacket 是从 socket 读到的一个数据报，连同内核给的控制消息（ECN、packet info），放在池里复用。
+// udpPacket 是从 套接字 读到的一个数据报，连同内核给的控制消息（ECN、数据包信息），放在池里复用。
 type udpPacket struct {
 	data [packetSize]byte
 	n    int

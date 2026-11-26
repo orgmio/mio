@@ -12,8 +12,8 @@ import (
 	"github.com/orgmio/mio/protocol"
 )
 
-// ListenUDP opens a UDP association for callers that select IP endpoints locally.
-// Addresses passed to WriteTo and returned by ReadFrom are UDP IP endpoints.
+// ListenUDP 建立 UDP 关联，供调用方在本地选择 IP 端点。
+// WriteTo 接收的地址和 ReadFrom 返回的地址均为 UDP 端点，由 IP 地址和端口组成。
 func (d *Dialer) ListenUDP(ctx context.Context) (net.PacketConn, error) {
 	stream, err := d.dial(ctx, protocol.StreamRequest{UDPAssociate: true})
 	if err != nil {
@@ -50,8 +50,8 @@ func (c *udpPacketConn) ReadFrom(p []byte) (int, net.Addr, error) {
 	}
 }
 
-// A timeout between datagrams is recoverable. An interrupted datagram can
-// leave the stream out of sync, so it ends the association.
+// 数据报之间发生超时后可以继续收发。数据报传输到一半被中断可能使流失去同步，
+// 因此会关闭 UDP 关联。
 type udpStreamIO struct {
 	net.Conn
 	progress bool

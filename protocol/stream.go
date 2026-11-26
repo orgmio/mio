@@ -277,7 +277,7 @@ func (st *stream) ReadFrom(r io.Reader) (int64, error) {
 	}
 }
 
-// takeWriteSlot waits for the shared TCP writer, observing changes to this stream's deadline.
+// takeWriteSlot 等待获取共享 TCP 连接的写入锁，并跟踪当前流的写入截止时间变化。
 func (st *stream) takeWriteSlot() error {
 	for {
 		st.mu.Lock()
@@ -303,7 +303,7 @@ func (st *stream) takeWriteSlot() error {
 			acquired = true
 		case <-st.writeNotify:
 		case <-timeout:
-			// Recheck the current deadline in case it changed as the timer fired.
+			// 再次检查截止时间，以防它在定时器触发时已被修改。
 		case <-st.sess.done:
 			err = st.sess.closeError()
 		}
@@ -323,7 +323,7 @@ func (st *stream) socketWriteDeadline() time.Time {
 	return st.frameWriteLimit
 }
 
-// writeData assigns new stream IDs while holding the same slot used to send the first frame.
+// writeData 在同一次持有写入锁期间分配新流编号并发送该流的首帧。
 func (st *stream) writeData(payload []byte, padLength int) error {
 	sess := st.sess
 	if err := st.takeWriteSlot(); err != nil {

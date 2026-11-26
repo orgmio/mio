@@ -28,7 +28,7 @@ func (node *SOCKS5Node) associateUDP(ctx context.Context, writer io.Writer, requ
 	stop := context.AfterFunc(node.dialer.ctx, cancel)
 	defer stop()
 	go func() {
-		// The TCP control connection is idle for the lifetime of the association.
+		// 在 UDP 关联存续期间，TCP 控制连接保持空闲。
 		var unexpected [1]byte
 		request.Reader.Read(unexpected[:])
 		cancel()
@@ -82,7 +82,7 @@ func (node *SOCKS5Node) associateUDP(ctx context.Context, writer io.Writer, requ
 }
 
 func forwardSOCKSDatagrams(relay *net.UDPConn, tunnel net.Conn, peer netip.Addr, port int, client *atomic.Pointer[netip.AddrPort]) {
-	// One extra byte distinguishes oversized or truncated packets.
+	// 多预留 1 个字节，用于识别超长或被截断的数据报。
 	packet := make([]byte, socksUDPHeaderSize+protocol.MaxDatagramSize+1)
 	for {
 		n, addr, err := relay.ReadFromUDPAddrPort(packet)

@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-// Stream 是 QUIC stream 需要满足的最小接口，quic-go 与 uquic 的类型都符合。
+// Stream 是 QUIC 流 需要满足的最小接口，quic-go 与 uquic 的类型都符合。
 type Stream interface {
 	io.ReadWriteCloser
 	SetDeadline(time.Time) error
@@ -14,7 +14,7 @@ type Stream interface {
 	SetWriteDeadline(time.Time) error
 }
 
-// StreamConn 把 QUIC stream 适配成 net.Conn，CloseWrite 只关闭发送方向。
+// StreamConn 把 QUIC 流 适配成 net.Conn，CloseWrite 只关闭发送方向。
 type StreamConn struct {
 	Stream
 	cancelRead func()

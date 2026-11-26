@@ -23,8 +23,13 @@ type tcpPool struct {
 	ctx  context.Context
 
 	mu       sync.Mutex
-	sessions []*protocol.Session
+	sessions []*tcpSession
 	dialing  *dialAttempt // 有协程正在新建连接时非 nil
+}
+
+type tcpSession struct {
+	*protocol.Session
+	early earlySupport
 }
 
 // dialAttempt 是一次正在进行的新建连接，done 关闭后 err 即为结果。
@@ -37,8 +42,8 @@ func newTCPPool(ctx context.Context, peer protocol.Peer) *tcpPool {
 	return &tcpPool{peer: peer, ctx: ctx}
 }
 
-// addSession makes the session established by a transport probe available for requests.
-func (p *tcpPool) addSession(session *protocol.Session) {
+// addSession 将传输探测建立的会话加入连接池，供后续请求使用。
+func (p *tcpPool) addSession(session *tcpSession) {
 	p.mu.Lock()
 	if p.ctx.Err() == nil {
 		session.SetIdleTimeout(minSessionIdle + rand.N(maxSessionIdle-minSessionIdle))
@@ -60,12 +65,15 @@ func (p *tcpPool) close() {
 }
 
 // dial 在一条可用的连接上请求服务端连接 target；连接在途中断开时换一条新的再试一次。
-func (p *tcpPool) dial(ctx context.Context, request protocol.StreamRequest) (conn net.Conn, err error) {
+func (p *tcpPool) dial(ctx context.Context, request protocol.StreamRequest, probe bool) (conn net.Conn, err error) {
 	for attempt := 0; attempt < 2; {
-		var session *protocol.Session
+		var session *tcpSession
 		session, err = p.session(ctx)
 		if err != nil {
 			return nil, err
+		}
+		if probe {
+			session.early.probe(p.ctx, session.DialRequest)
 		}
 		conn, err = session.DialRequest(ctx, request)
 		if errors.Is(err, protocol.ErrStreamLimit) {
@@ -85,9 +93,25 @@ func (p *tcpPool) dial(ctx context.Context, request protocol.StreamRequest) (con
 	return nil, err
 }
 
+func (p *tcpPool) earlySession() *tcpSession {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for i := len(p.sessions) - 1; i >= 0; i-- {
+		session := p.sessions[i]
+		select {
+		case <-session.Done():
+		default:
+			if session.early.confirmed.Load() && session.NumStreams() < protocol.MaxSessionStreams {
+				return session
+			}
+		}
+	}
+	return nil
+}
+
 // session 返回一条还能再开流的连接，没有就新建一条。同一时刻只有一个协程在新建，其余的等它建好后复用；
 // 新建失败时等待者直接拿到同一个错误，不会排着队一个接一个地重试。
-func (p *tcpPool) session(ctx context.Context) (*protocol.Session, error) {
+func (p *tcpPool) session(ctx context.Context) (*tcpSession, error) {
 	for {
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -136,7 +160,7 @@ func (p *tcpPool) session(ctx context.Context) (*protocol.Session, error) {
 func (p *tcpPool) connect(attempt *dialAttempt) {
 	session, err := protocol.DialSession(p.ctx, p.peer)
 	if err == nil {
-		p.addSession(session)
+		p.addSession(&tcpSession{Session: session})
 	}
 	p.mu.Lock()
 	p.dialing = nil

@@ -26,6 +26,10 @@ func (s *Server) proxy(ctx context.Context, conn net.Conn) {
 	if p, ok := conn.(interface{ SetNextPadding(int, int) }); ok {
 		p.SetNextPadding(16, 512)
 	}
+	if request.ProbeEarlyTCP {
+		protocol.WriteReply(conn, true)
+		return
+	}
 	if request.UDPAssociate {
 		if err := protocol.WriteReply(conn, true); err == nil {
 			relayUDPAssociation(ctx, conn)

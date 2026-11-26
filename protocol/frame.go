@@ -25,7 +25,7 @@ const (
 
 	FrameHeaderSize = 7
 
-	// maxRecordBody 是一条记录的密文上限，与不带填充的 TLS 1.3 实现相同：16384 字节明文 + 1 字节类型 + 16 字节 tag。
+	// maxRecordBody 是一条记录的密文上限，与不带填充的 TLS 1.3 实现相同：16384 字节明文 + 1 字节类型 + 16 字节认证标签。
 	maxRecordBody = 16384 + 1 + 16
 	// MaxFramePayload 是一个帧的负载上限，正好填满一条最大的记录。
 	MaxFramePayload = maxRecordBody - 16 - FrameHeaderSize
@@ -84,7 +84,7 @@ func (s *Session) writeFrame(typ byte, id uint32, payload []byte, padLength int)
 
 const sessionWriteTimeout = 10 * time.Second
 
-// writeFrameLocked requires the session write slot and an installed socket deadline.
+// 调用 writeFrameLocked 前，须持有会话的写入锁并设置底层连接的写入截止时间。
 func (s *Session) writeFrameLocked(typ byte, id uint32, payload []byte, padLength int) error {
 	if s.sendSeq >= maxRecordsPerKey {
 		s.closeWithError(errRecordLimit)

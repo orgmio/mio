@@ -92,7 +92,7 @@ func (s *Server) handleQUIC(ctx context.Context, conn *quic.Conn) {
 	}
 }
 
-// authQUIC 校验客户端在首个 stream 上发来的临时公钥与证明（绑定 TLS 导出密钥），并回送只有持有私钥才能算出的服务端证明。
+// authQUIC 校验客户端在首条流 上发来的临时公钥与证明（绑定 TLS 导出密钥），并回送只有持有私钥才能算出的服务端证明。
 func (s *Server) authQUIC(ctx context.Context, conn *quic.Conn) error {
 	authCtx, cancel := context.WithTimeout(ctx, quicauth.Timeout)
 	defer cancel()

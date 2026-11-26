@@ -25,9 +25,9 @@ var startTime = time.Now()
 type timestampMode uint8
 
 const (
-	timestampRelative timestampMode = iota // INFO[0012] message
-	timestampFull                          // +0800 2026-11-15 19:00:37 INFO message
-	timestampNone                          // INFO message
+	timestampRelative timestampMode = iota // INFO[0012] 消息
+	timestampFull                          // +0800 2026-11-15 19:00:37 INFO 消息
+	timestampNone                          // INFO 消息
 )
 
 // logHandler 把 slog 记录写成一行：级别、时间戳、消息。

@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-// SessionWindow is the initial aggregate DATA credit in each direction.
+// SessionWindow 是会话在每个方向上为所有流分配的初始数据帧总额度，以字节计。
 const SessionWindow = 32 << 20
 
 func (s *Session) takeSendCredit(limit int) (int, <-chan struct{}) {
@@ -50,8 +50,8 @@ func (s *Session) releaseReceiveCredit(n int) {
 	notify(s.windowReady)
 }
 
-// The reader never waits for the shared socket writer. Batch window updates
-// briefly, including small reads that free the only available session credit.
+// 读取方无需等待共享连接上的写入操作。窗口更新会在短暂等待后批量发送，
+// 包括会话额度耗尽后少量读取所释放的额度。
 func (s *Session) writeControlFrames() {
 	for {
 		var err error

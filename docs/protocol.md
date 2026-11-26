@@ -269,7 +269,7 @@ v1 客户端必须以服务端观察到的源 IP 和 UDP 源端口在会话期�
 ## 目标请求
 
 每条代理流（QUIC 路径上是每个代理 stream）由客户端发送目标请求。请求的第一个字节区分 TCP
-目标地址和可选的 UDP 转发扩展。
+目标地址、UDP 关联和提前发送 TCP 数据的能力探测。
 
 ```
 request = atyp(1) ‖ address ‖ port(2)
@@ -279,10 +279,22 @@ request = atyp(1) ‖ address ‖ port(2)
 ```
 
 服务端必须对格式有效的请求尝试建立到目标的 TCP 连接，并回复 1 字节。成功时回复 `0`，
-随后双向转发数据。连接失败时回复 `1` 并结束此流。客户端必须在收到成功应答后才发送应用数据。
+随后双向转发数据。连接失败时回复 `1` 并结束此流。未确认支持[提前发送 TCP 数据](#提前发送-tcp-数据)时，
+客户端必须在收到成功应答后才发送应用数据。
 任何非零应答都表示失败。收到未知地址类型、零长度域名或未读完整请求就遇到流结束时，
 服务端必须结束这条流。
 在 TCP 路径上，实现必须将请求和应答各自放在一个 data 帧里。在 QUIC 路径上，实现必须直接将它们写在 stream 上。
+
+### 提前发送 TCP 数据
+
+客户端也许在已认证会话上开一条独立的代理流，发送单字节 `02` 探测此能力。支持的服务端必须回复
+单字节 `00` 并结束该流。探测不建立目标连接。旧服务端会把 `02` 视为未知地址类型并结束该流。
+探测失败或超时后，客户端仍可在同一会话中使用普通目标请求。
+
+收到成功的探测应答后，客户端也许在同一会话中发送 TCP 目标请求，并在收到目标应答前发送应用数据。
+服务端必须按流内顺序处理这些字节，只在成功连接目标后才向目标转发，并在向客户端转发目标数据前发出成功应答。
+目标连接失败时，服务端必须丢弃此流的应用数据。客户端一旦向某条路径发送了应用数据，必须不因等待目标应答失败
+而自动把这些字节重发到另一条路径。
 
 ## UDP 转发扩展
 
@@ -328,20 +340,20 @@ UDP 负载在 mio 两端之间走可靠、有序的代理流，同一条流上�
 import "github.com/orgmio/mio/protocol"
 ```
 
-| 接口                                                        | 作用                                                  |
-| ----------------------------------------------------------- | ----------------------------------------------------- |
-| `DialSession(ctx, Peer)` / `Session.Dial(ctx, target)`      | 客户端 TCP 路径：建立一条连接，在其上打开多个代理连接 |
-| `Handshake(ctx, conn, Peer)`                                | 只做客户端握手，返回 `*Session`                       |
-| `VerifyAuth` / `Accept`                                     | 服务端认证与握手，`Accept` 返回 `*Session`            |
-| `GenerateKeyPair` / `ParsePrivateKey` / `ParsePublicKey`    | 密钥生成与解析                                        |
-| `Session`                                                   | 记录层与流（`Open` / `Accept`）                       |
-| `DeriveKeys`                                                | 密钥派生                                              |
-| `WriteRequest` / `ReadRequest` / `WriteReply` / `ReadReply` | 请求格式                                              |
-| `StreamRequest` / `ReadStreamRequest` / `Session.DialRequest` | 打开 TCP 请求或 UDP 关联                            |
-| `WriteDatagram` / `ReadDatagram` / `ParseDatagram`             | UDP 关联的数据报格式                               |
-| `client.Dialer.ListenUDP`                                    | 为透明代理提供以 IP 地址收发数据报的 UDP 关联          |
-| `protocol/quicauth`                                         | 标记、重放缓存与认证（`ClientAuth` / `ServerAuth`）   |
-| `Version`                                                   | Go 参考实现报告的协议版本                             |
+| 接口                                                          | 作用                                                  |
+| ------------------------------------------------------------- | ----------------------------------------------------- |
+| `DialSession(ctx, Peer)` / `Session.Dial(ctx, target)`        | 客户端 TCP 路径：建立一条连接，在其上打开多个代理连接 |
+| `Handshake(ctx, conn, Peer)`                                  | 只做客户端握手，返回 `*Session`                       |
+| `VerifyAuth` / `Accept`                                       | 服务端认证与握手，`Accept` 返回 `*Session`            |
+| `GenerateKeyPair` / `ParsePrivateKey` / `ParsePublicKey`      | 密钥生成与解析                                        |
+| `Session`                                                     | 记录层与流（`Open` / `Accept`）                       |
+| `DeriveKeys`                                                  | 密钥派生                                              |
+| `WriteRequest` / `ReadRequest` / `WriteReply` / `ReadReply`   | 请求格式                                              |
+| `StreamRequest` / `ReadStreamRequest` / `Session.DialRequest` | 打开 TCP 请求或 UDP 关联                              |
+| `WriteDatagram` / `ReadDatagram` / `ParseDatagram`            | UDP 关联的数据报格式                                  |
+| `client.Dialer.ListenUDP`                                     | 为透明代理提供以 IP 地址收发数据报的 UDP 关联         |
+| `protocol/quicauth`                                           | 标记、重放缓存与认证（`ClientAuth` / `ServerAuth`）   |
+| `Version`                                                     | Go 参考实现报告的协议版本                             |
 
 `protocol` 及其子包不依赖 quic-go。只有引用 `client`、`server` 包时才需要 quic-go，而且这时需要在自己的 `go.mod` 里加上与 mio 相同的 `replace`：
 

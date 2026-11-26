@@ -13,10 +13,10 @@ import (
 
 const virtualQueueLen = 1024
 
-// virtualConn 是交给 quic-go 的 socket：只读得到已被分流给 mio 的数据报，写出直接走真实的 UDP socket。
+// virtualConn 是交给 quic-go 的 套接字：只读得到已被分流给 mio 的数据报，写出直接走真实的 UDP 套接字。
 //
-// 它实现了 quic-go 的 OOBCapablePacketConn 和 ReadBatch，quic-go 因此把它当作真正的 UDP socket：
-// 发送用 sendmsg 带上 GSO、ECN 和 packet info，socket 选项（DF、缓冲大小、接收 ECN 与 packet info）直接设在真实 socket 上；
+// 它实现了 quic-go 的 OOBCapablePacketConn 和 ReadBatch，quic-go 因此把它当作真正的 UDP 套接字：
+// 发送用 sendmsg 带上 GSO、ECN 和 数据包信息，套接字 选项（DF、缓冲大小、接收 ECN 与 数据包信息）直接设在真实 套接字 上；
 // 接收时一次取走队列里所有已到的数据报，内核给的控制消息原样交过去。
 type virtualConn struct {
 	sock *net.UDPConn

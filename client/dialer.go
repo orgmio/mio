@@ -7,6 +7,7 @@ import (
 	"math/rand/v2"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/orgmio/mio/protocol"
@@ -50,14 +51,15 @@ type quicDialAttempt struct {
 	err     error
 }
 
-// Dialer starts on TCP. It gives the preferred transport a head start and
-// selects a backup only if it opens the requested stream first.
+// Dialer 最初使用 TCP，让首选传输先尝试打开请求所需的流。
+// 只有备用传输先成功打开流时，才会采用备用传输。
 type Dialer struct {
 	peer       protocol.Peer
 	tcp        *tcpPool
 	enableQUIC bool
 	ctx        context.Context
 	cancel     context.CancelFunc
+	early      atomic.Bool
 
 	mu         sync.Mutex
 	preferred  transportChoice
@@ -90,7 +92,7 @@ func (d *Dialer) dial(ctx context.Context, request protocol.StreamRequest) (net.
 		return nil, err
 	}
 	if !d.enableQUIC {
-		return d.tcp.dial(ctx, request)
+		return d.tcp.dial(ctx, request, d.early.Load())
 	}
 
 	d.mu.Lock()
@@ -168,7 +170,7 @@ func (d *Dialer) dial(ctx context.Context, request protocol.StreamRequest) (net.
 	return nil, dialErr
 }
 
-// The caller holds d.mu.
+// 调用方须持有 d.mu 锁。
 func (d *Dialer) scheduleProbe(minimum, maximum time.Duration) {
 	d.nextProbe = time.Now().Add(minimum + rand.N(maximum-minimum))
 }
@@ -200,13 +202,16 @@ func (d *Dialer) recordSuccess(ctx context.Context, generation uint64, result di
 
 func (d *Dialer) dialStream(ctx context.Context, transport transportChoice, request protocol.StreamRequest) (net.Conn, error) {
 	if transport == transportTCP {
-		return d.tcp.dial(ctx, request)
+		return d.tcp.dial(ctx, request, d.early.Load())
 	}
 	var streamErr error
 	for range 2 {
 		session, err := d.quicSession(ctx)
 		if err != nil {
 			return nil, err
+		}
+		if d.early.Load() {
+			session.early.probe(session.conn.Context(), session.dialStream)
 		}
 		conn, err := session.dialStream(ctx, request)
 		if err == nil || errors.Is(err, protocol.ErrConnectFailed) || ctx.Err() != nil || session.conn.Context().Err() == nil {
@@ -263,7 +268,7 @@ func (d *Dialer) connectQUIC(attempt *quicDialAttempt) {
 	}
 }
 
-// Close cancels pending dials and closes both transports.
+// Close 取消尚未完成的拨号，并关闭两种传输。
 func (d *Dialer) Close() {
 	d.cancel()
 	d.mu.Lock()

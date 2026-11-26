@@ -7,15 +7,15 @@ import (
 	"io"
 )
 
-// MaxDatagramSize includes the encoded address, leaving room for the three
-// reserved and fragment bytes in an IPv4 SOCKS5 UDP packet.
+// MaxDatagramSize 包含编码后的地址，并为 IPv4 SOCKS5 UDP 数据报的
+// 保留字段和分片字段留出 3 个字节。
 const MaxDatagramSize = 65504
 
-const minDatagramSize = 5 // Address type, name length, one-byte name, and port.
+const minDatagramSize = 5 // 地址类型、域名长度、1 字节域名和端口。
 
 var errDatagramSize = errors.New("invalid mio UDP datagram size")
 
-// WriteDatagram writes one address and its UDP payload, prefixed by their total length.
+// WriteDatagram 先写入总长度，再写入地址及其 UDP 负载。
 func WriteDatagram(w io.Writer, datagram []byte) error {
 	if len(datagram) < minDatagramSize || len(datagram) > MaxDatagramSize {
 		return errDatagramSize
@@ -24,7 +24,7 @@ func WriteDatagram(w io.Writer, datagram []byte) error {
 	return writeAll(w, append(record, datagram...))
 }
 
-// ReadDatagram reads one address and its UDP payload into a caller-owned buffer.
+// ReadDatagram 将地址及其 UDP 负载读入调用方提供的缓冲区。
 func ReadDatagram(r io.Reader, buf []byte) ([]byte, error) {
 	var header [2]byte
 	if _, err := io.ReadFull(r, header[:]); err != nil {
@@ -40,7 +40,7 @@ func ReadDatagram(r io.Reader, buf []byte) ([]byte, error) {
 	return buf[:size], nil
 }
 
-// ParseDatagram splits a datagram into its encoded endpoint and its original UDP payload.
+// ParseDatagram 从数据报中解析出端点，并返回原始 UDP 负载。
 func ParseDatagram(datagram []byte) (endpoint string, payload []byte, err error) {
 	r := bytes.NewReader(datagram)
 	endpoint, err = ReadRequest(r)

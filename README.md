@@ -8,7 +8,7 @@
 
 ## 🚀 特性
 
-![公网 443 性能对比与本机 TCP/UDP 切换验证](https://raw.githubusercontent.com/orgmio/mio/refs/heads/main/docs/benchmark.png)
+![mio测速](docs/benchmark.png)
 
 - 抗审查: 使用utls来将数据包外观伪装成`Chrome`，并在认证失败时尽可能将数据转发给伪装网站。
 - 抗重放攻击：内置`client/server_random`校验机制和后量子加密，有效抵抗重放攻击和量子计算机解密。
