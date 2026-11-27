@@ -3,7 +3,7 @@ package protocol
 import "strings"
 
 // 这里是 mio 的协议版本。
-const Version = "1.0.2"
+const Version = "1.0.3"
 
 var kdfVersion = protocolKDFVersion(Version)
 

@@ -12,7 +12,7 @@ import (
 
 // 这里是 mio 的程序版本。
 
-const Version = "0.7.0"
+const Version = "0.7.1"
 
 var nameOnly bool
 
