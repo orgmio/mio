@@ -137,15 +137,15 @@ func writeAll(w io.Writer, p []byte) error {
 // readFrame 读取并原地解密一条记录；返回的负载在下一次 readFrame 前有效。
 // skipForeign 为 true 时跳过解不开的记录（握手期真站发来的记录）。
 func (s *Session) readFrame(skipForeign bool) (typ byte, id uint32, payload []byte, err error) {
-	var header [tlsrecord.HeaderSize]byte
+	header := s.readHeader[:]
 	for {
-		if _, err := io.ReadFull(s.reader, header[:]); err != nil {
+		if _, err := io.ReadFull(s.reader, header); err != nil {
 			return 0, 0, nil, err
 		}
 		if s.recvSeq >= maxRecordsPerKey {
 			return 0, 0, nil, errRecordLimit
 		}
-		if !tlsrecord.ValidHeader(header[:]) {
+		if !tlsrecord.ValidHeader(header) {
 			return 0, 0, nil, errors.New("invalid record header")
 		}
 		length := int(binary.BigEndian.Uint16(header[3:]))
@@ -156,7 +156,7 @@ func (s *Session) readFrame(skipForeign bool) (typ byte, id uint32, payload []by
 		if _, err := io.ReadFull(s.reader, body); err != nil {
 			return 0, 0, nil, err
 		}
-		plain, err := s.recv.Open(body[:0], seqNonce(&s.recvNonce, s.recvSeq), body, header[:])
+		plain, err := s.recv.Open(body[:0], seqNonce(&s.recvNonce, s.recvSeq), body, header)
 		if err != nil {
 			if skipForeign {
 				continue

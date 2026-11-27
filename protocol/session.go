@@ -10,6 +10,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/orgmio/mio/internal/tlsrecord"
 )
 
 // MaxSessionStreams 限制单个 TCP 会话中的并发流数量。
@@ -39,10 +41,11 @@ type Session struct {
 	writeBuf  []byte // 整条记录在这里拼好并原地加密，跨帧复用
 
 	// 接收方向：握手阶段由握手协程使用，之后只由 readLoop 使用。
-	recv      cipher.AEAD
-	recvSeq   uint64
-	recvNonce [gcmNonceSize]byte
-	readBuf   []byte
+	recv       cipher.AEAD
+	recvSeq    uint64
+	recvNonce  [gcmNonceSize]byte
+	readHeader [tlsrecord.HeaderSize]byte
+	readBuf    []byte
 	// lastRecv 是最近一次收到对端记录的时间（UnixNano），用来判断连接是否已经悄悄断了。
 	lastRecv atomic.Int64
 
