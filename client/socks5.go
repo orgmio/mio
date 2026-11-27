@@ -65,7 +65,7 @@ func (node *SOCKS5Node) dial(ctx context.Context, _, _ string, request *socks5.R
 	target := net.JoinHostPort(host, strconv.Itoa(dest.Port))
 
 	slog.Info("inbound/socks: inbound connection to " + target)
-	conn, err := node.dialer.Dial(ctx, target)
+	conn, err := node.dialer.DialEarly(ctx, target)
 	if err != nil {
 		slog.Error("outbound/mio: open connection to "+target, "err", err)
 		return nil, err

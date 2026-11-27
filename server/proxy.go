@@ -40,8 +40,13 @@ func (s *Server) proxy(ctx context.Context, conn net.Conn) {
 
 	slog.Info("inbound/mio: inbound connection from " + from)
 	slog.Info("inbound/mio: inbound connection to " + target)
-	dialer := net.Dialer{Timeout: dialTimeout}
-	remote, err := dialer.DialContext(ctx, "tcp", target)
+	var remote net.Conn
+	if s.dialContext != nil {
+		remote, err = s.dialContext(ctx, "tcp", target)
+	} else {
+		dialer := net.Dialer{Timeout: dialTimeout}
+		remote, err = dialer.DialContext(ctx, "tcp", target)
+	}
 	if err != nil {
 		slog.Error("outbound/direct: open connection to "+target, "err", err)
 		protocol.WriteReply(conn, false)

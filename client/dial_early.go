@@ -100,6 +100,16 @@ func (c *earlyConn) ReadFrom(r io.Reader) (int64, error) {
 	return io.Copy(c.Conn, r)
 }
 
+func (c *earlyConn) WriteTo(w io.Writer) (int64, error) {
+	if err := c.readReply(); err != nil {
+		return 0, err
+	}
+	if wt, ok := c.Conn.(io.WriterTo); ok {
+		return wt.WriteTo(w)
+	}
+	return io.Copy(w, c.Conn)
+}
+
 // DialEarly 在此前选定且支持提前发送 TCP 数据的会话上，允许在收到目标连接应答前写入。
 // 连接目标时发生的错误可能在调用 Read 时返回。
 func (d *Dialer) DialEarly(ctx context.Context, target string) (net.Conn, error) {

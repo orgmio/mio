@@ -1,8 +1,8 @@
 package client
 
 import (
-	"bytes"
 	"context"
+	"encoding/binary"
 	"errors"
 	"net"
 	"net/netip"
@@ -23,10 +23,11 @@ func (d *Dialer) ListenUDP(ctx context.Context) (net.PacketConn, error) {
 }
 
 type udpPacketConn struct {
-	stream  net.Conn
-	readMu  sync.Mutex
-	writeMu sync.Mutex
-	buf     [protocol.MaxDatagramSize]byte
+	stream   net.Conn
+	readMu   sync.Mutex
+	writeMu  sync.Mutex
+	buf      [protocol.MaxDatagramSize]byte
+	writeBuf [protocol.MaxDatagramSize]byte
 }
 
 func (c *udpPacketConn) ReadFrom(p []byte) (int, net.Addr, error) {
@@ -84,19 +85,32 @@ func (c *udpPacketConn) WriteTo(p []byte, addr net.Addr) (int, error) {
 	if err != nil || target.Addr().Zone() != "" || target.Port() == 0 {
 		return 0, errors.New("invalid mio UDP destination")
 	}
-	var datagram bytes.Buffer
-	if err := protocol.WriteRequest(&datagram, target.String()); err != nil {
-		return 0, err
+	ap := target.Addr().Unmap()
+	var hdr [19]byte // 最大 IPv6: atyp(1) + addr(16) + port(2)
+	var hdrLen int
+	if ap.Is4() {
+		hdr[0] = 1
+		a4 := ap.As4()
+		copy(hdr[1:5], a4[:])
+		binary.BigEndian.PutUint16(hdr[5:7], target.Port())
+		hdrLen = 7
+	} else {
+		hdr[0] = 4
+		a16 := ap.As16()
+		copy(hdr[1:17], a16[:])
+		binary.BigEndian.PutUint16(hdr[17:19], target.Port())
+		hdrLen = 19
 	}
-	if len(p) > protocol.MaxDatagramSize-datagram.Len() {
+	if len(p) > protocol.MaxDatagramSize-hdrLen {
 		return 0, errors.New("mio UDP datagram too large")
 	}
-	datagram.Write(p)
 
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
+	copy(c.writeBuf[:hdrLen], hdr[:hdrLen])
+	copy(c.writeBuf[hdrLen:], p)
 	stream := udpStreamIO{Conn: c.stream}
-	if err := protocol.WriteDatagram(&stream, datagram.Bytes()); err != nil {
+	if err := protocol.WriteDatagram(&stream, c.writeBuf[:hdrLen+len(p)]); err != nil {
 		stream.closeOnError(err)
 		return 0, err
 	}

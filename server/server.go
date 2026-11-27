@@ -21,12 +21,18 @@ const (
 
 // Server 把所有连接当作普通访问转发给真站，只有握手后发来正确认证记录的客户端才会被接管并代理。
 type Server struct {
-	cfg config.Inbound
-	key *ecdh.PrivateKey
+	cfg         config.Inbound
+	key         *ecdh.PrivateKey
+	dialContext func(ctx context.Context, network, address string) (net.Conn, error)
 
 	listener  net.Listener
 	closeQUIC func()
 	serveQUIC func() error // 为 nil 表示 QUIC 没有启动成功
+}
+
+// SetDialContext 设置代理出站 TCP 连接使用的拨号函数；未设置时使用默认 net.Dialer。
+func (s *Server) SetDialContext(fn func(ctx context.Context, network, address string) (net.Conn, error)) {
+	s.dialContext = fn
 }
 
 func New(cfg config.Inbound) (*Server, error) {

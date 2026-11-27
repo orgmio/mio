@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"io"
+	"sync"
 )
 
 // MaxDatagramSize 包含编码后的地址，并为 IPv4 SOCKS5 UDP 数据报的
@@ -15,13 +16,25 @@ const minDatagramSize = 5 // 地址类型、域名长度、1 字节域名和端�
 
 var errDatagramSize = errors.New("invalid mio UDP datagram size")
 
+var datagramBufPool = sync.Pool{
+	New: func() any {
+		b := make([]byte, 2+MaxDatagramSize)
+		return &b
+	},
+}
+
 // WriteDatagram 先写入总长度，再写入地址及其 UDP 负载。
 func WriteDatagram(w io.Writer, datagram []byte) error {
 	if len(datagram) < minDatagramSize || len(datagram) > MaxDatagramSize {
 		return errDatagramSize
 	}
-	record := binary.BigEndian.AppendUint16(make([]byte, 0, 2+len(datagram)), uint16(len(datagram)))
-	return writeAll(w, append(record, datagram...))
+	bp := datagramBufPool.Get().(*[]byte)
+	buf := (*bp)[:2+len(datagram)]
+	binary.BigEndian.PutUint16(buf[:2], uint16(len(datagram)))
+	copy(buf[2:], datagram)
+	err := writeAll(w, buf)
+	datagramBufPool.Put(bp)
+	return err
 }
 
 // ReadDatagram 将地址及其 UDP 负载读入调用方提供的缓冲区。
