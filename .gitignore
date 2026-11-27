@@ -13,7 +13,7 @@ mio
 # 配置文件
 *.toml
 
-# 由 `go test -c` 生成的测试二进制文件
+# 测试文件
 *.test
 *_test.go
 

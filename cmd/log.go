@@ -10,6 +10,8 @@ import (
 	"sync"
 	"time"
 
+	"golang.org/x/term"
+
 	"github.com/orgmio/mio/config"
 )
 
@@ -102,7 +104,7 @@ func (h *logHandler) Handle(_ context.Context, record slog.Record) error {
 
 // consoleHandler 写到标准错误，时间戳是程序启动以来的秒数。
 func consoleHandler(level slog.Level) *logHandler {
-	return newLogHandler(os.Stderr, level, !disableColor, timestampRelative)
+	return newLogHandler(os.Stderr, level, !disableColor && term.IsTerminal(int(os.Stderr.Fd())), timestampRelative)
 }
 
 // useConsoleLog 是读到配置之前使用的日志。

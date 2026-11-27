@@ -94,7 +94,7 @@ func newBandwidthSample() *bandwidthSample {
 // MaxAckHeightTracker 是 BandwidthSampler 的一部分，在每次确认事件后调用，用于跟踪确认聚合程度。
 type maxAckHeightTracker struct {
 	// 跟踪确认速率超过估计带宽时，超额确认的最大字节数。
-	maxAckHeightFilter *WindowedFilter[extraAckedEvent, roundTripCount]
+	maxAckHeightFilter *WindowedFilter[extraAckedEvent]
 	// 此次聚合的开始时间以及期间确认的字节数。
 	aggregationEpochStartTime monotime.Time
 	aggregationEpochBytes     congestion.ByteCount
@@ -659,10 +659,6 @@ func (b *bandwidthSampler) EndOfAppLimitedPhase() congestion.PacketNumber {
 	return b.endOfAppLimitedPhase
 }
 
-func (b *bandwidthSampler) max_ack_height() congestion.ByteCount {
-	return b.maxAckHeightTracker.Get()
-}
-
 func (b *bandwidthSampler) chooseA0Point(totalBytesAcked congestion.ByteCount, a0 *ackPoint) bool {
 	if b.a0Candidates.Empty() {
 		return false
@@ -792,8 +788,4 @@ func sentPacketToSendTimeState(sentPacket *connectionStateOnSentPacket, sendTime
 func bytesFromBandwidthAndTimeDelta(bandwidth Bandwidth, delta time.Duration) congestion.ByteCount {
 	return (congestion.ByteCount(bandwidth) * congestion.ByteCount(delta)) /
 		(congestion.ByteCount(time.Second) * 8)
-}
-
-func timeDeltaFromBytesAndBandwidth(bytes congestion.ByteCount, bandwidth Bandwidth) time.Duration {
-	return time.Duration(bytes*8) * time.Second / time.Duration(bandwidth)
 }

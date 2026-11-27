@@ -3,7 +3,6 @@ package bbr
 import (
 	"fmt"
 	"math/rand"
-	"net"
 	"os"
 	"strconv"
 	"time"
@@ -11,7 +10,7 @@ import (
 	"github.com/apernet/quic-go/congestion"
 	"github.com/apernet/quic-go/monotime"
 
-	"github.com/orgmio/mio/internal/congestion/common"
+	"github.com/orgmio/mio/protocol/congestion/common"
 )
 
 // BbrSender 实现 BBR 拥塞控制算法。BBR 旨在估算当前可用的瓶颈带宽和 RTT（名称由此而来），
@@ -97,7 +96,7 @@ type bbrSender struct {
 	bytesLostInRound congestion.ByteCount
 
 	// 跟踪最近多个往返期间最大带宽的滤波器。
-	maxBandwidth *WindowedFilter[Bandwidth, roundTripCount]
+	maxBandwidth *WindowedFilter[Bandwidth]
 
 	// 最小 RTT 估计值。如果 10 秒内没有采集到新值，该值将自动过期并触发 PROBE_RTT 模式。
 	minRtt time.Duration
@@ -170,13 +169,6 @@ type bbrSender struct {
 	endRecoveryAt congestion.PacketNumber
 	// 丢包恢复期间用于限制在途字节数的窗口。
 	recoveryWindow congestion.ByteCount
-	// 如果为 true，则将恢复期间的所有样本视为受应用数据量限制。
-	isAppLimitedRecovery bool // 未使用
-
-	// 为 true 时，按 1.5 倍速率发送，并在 STARTUP 中禁用数据包守恒机制。
-	slowerStartup bool // 未使用
-	// 为 true 时，在 STARTUP 中禁用数据包守恒机制。
-	rateBasedStartup bool // 未使用
 
 	// 为 true 时，在 STARTUP 期间加入最近一次确认聚合测量值。
 	enableAckAggregationDuringStartup bool
@@ -195,9 +187,6 @@ type bbrSender struct {
 	bytesLostMultiplierWhileDetectingOvershooting uint8
 	// 检测到超调时，pacing_rate_ 不得降至此值 / min_rtt 以下。
 	cwndToCalculateMinPacingRate congestion.ByteCount
-
-	// 调整网络参数时的最大拥塞窗口。
-	maxCongestionWindowWithNetworkParametersAdjusted congestion.ByteCount // 未使用
 
 	// 参数。
 	maxDatagramSize congestion.ByteCount
@@ -249,13 +238,13 @@ func newBbrSender(
 		recoveryState:                bbrRecoveryStateNotInRecovery,
 		endRecoveryAt:                invalidPacketNumber,
 		recoveryWindow:               initialMaxCongestionWindow,
-		bytesLostMultiplierWhileDetectingOvershooting:    2,
-		enableAckAggregationDuringStartup:                true,
-		expireAckAggregationInStartup:                    true,
-		cwndToCalculateMinPacingRate:                     initialCongestionWindow,
-		maxCongestionWindowWithNetworkParametersAdjusted: initialMaxCongestionWindow,
-		maxDatagramSize:                                  initialMaxDatagramSize,
-		debug:                                            debug,
+		bytesLostMultiplierWhileDetectingOvershooting: 2,
+		enableAckAggregationDuringStartup:             true,
+		expireAckAggregationInStartup:                 true,
+		cwndToCalculateMinPacingRate:                  initialCongestionWindow,
+
+		maxDatagramSize: initialMaxDatagramSize,
+		debug:           debug,
 	}
 	b.pacer = common.NewPacer(b.bandwidthForPacer)
 	if b.debug {
@@ -284,11 +273,6 @@ func (b *bbrSender) rescalePacketSizedWindows(maxDatagramSize congestion.ByteCou
 	b.maxCongestionWindow = scaleByteWindowForDatagramSize(b.maxCongestionWindow, oldMaxDatagramSize, maxDatagramSize)
 	b.minCongestionWindow = minCongestionWindowForMaxDatagramSize(maxDatagramSize)
 	b.cwndToCalculateMinPacingRate = scaleByteWindowForDatagramSize(b.cwndToCalculateMinPacingRate, oldMaxDatagramSize, maxDatagramSize)
-	b.maxCongestionWindowWithNetworkParametersAdjusted = scaleByteWindowForDatagramSize(
-		b.maxCongestionWindowWithNetworkParametersAdjusted,
-		oldMaxDatagramSize,
-		maxDatagramSize,
-	)
 }
 
 func (b *bbrSender) SetRTTStatsProvider(provider congestion.RTTStatsProvider) {
@@ -504,14 +488,6 @@ func (b *bbrSender) PacingRate() Bandwidth {
 	}
 
 	return b.pacingRate
-}
-
-// 设置 STARTUP 使用的 CWND 增益，必须大于 1。
-func (b *bbrSender) setHighCwndGain(highCwndGain float64) {
-	b.highCwndGain = highCwndGain
-	if b.mode == bbrModeStartup {
-		b.congestionWindowGain = highCwndGain
-	}
 }
 
 // 获取当前带宽估计值。注意，Bandwidth 的单位是 bits per second。
@@ -894,16 +870,6 @@ func (b *bbrSender) debugPrint(format string, a ...any) {
 
 func bdpFromRttAndBandwidth(rtt time.Duration, bandwidth Bandwidth) congestion.ByteCount {
 	return congestion.ByteCount(rtt) * congestion.ByteCount(bandwidth) / congestion.ByteCount(BytesPerSecond) / congestion.ByteCount(time.Second)
-}
-
-func GetInitialPacketSize(addr net.Addr) congestion.ByteCount {
-	// 如果这不是 UDP 地址，我们就无法获知 MTU。
-	// 使用 Initial 数据包的最小尺寸作为最大数据包尺寸。
-	if _, ok := addr.(*net.UDPAddr); ok {
-		return congestion.InitialPacketSize
-	} else {
-		return congestion.MinInitialPacketSize
-	}
 }
 
 func formatSpeed(bw Bandwidth) string {

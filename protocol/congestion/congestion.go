@@ -4,7 +4,7 @@ package congestion
 import (
 	"github.com/apernet/quic-go"
 
-	"github.com/orgmio/mio/internal/congestion/bbr"
+	"github.com/orgmio/mio/protocol/congestion/bbr"
 )
 
 // UseBBR 在 QUIC 握手完成后为 conn 安装 BBR 拥塞控制器。

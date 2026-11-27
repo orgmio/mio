@@ -48,6 +48,8 @@ func (s *Server) proxy(ctx context.Context, conn net.Conn) {
 		return
 	}
 	defer remote.Close()
+	stop := context.AfterFunc(ctx, func() { remote.Close() })
+	defer stop()
 
 	if err := protocol.WriteReply(conn, true); err != nil {
 		return

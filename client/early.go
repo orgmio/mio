@@ -10,6 +10,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/orgmio/mio/config"
 	"github.com/orgmio/mio/protocol"
 )
 
@@ -104,9 +105,12 @@ func (c *earlyConn) ReadFrom(r io.Reader) (int64, error) {
 func (d *Dialer) DialEarly(ctx context.Context, target string) (net.Conn, error) {
 	d.early.Store(true)
 	d.mu.Lock()
-	preferred, session, generation := d.preferred, d.quic, d.generation
-	selected := !d.enableQUIC || d.latency > 0
-	probeDue := !d.nextProbe.IsZero() && !time.Now().Before(d.nextProbe)
+	preferred, session, generation := d.policy.preferred, d.quic, d.policy.generation
+	if d.transport == config.TransportUDP {
+		preferred = transportQUIC
+	}
+	selected := d.transport != config.TransportAuto || d.policy.latency > 0
+	probeDue := !d.policy.nextProbe.IsZero() && !time.Now().Before(d.policy.nextProbe)
 	d.mu.Unlock()
 	if d.ctx.Err() != nil || ctx.Err() != nil || !selected || probeDue {
 		return d.Dial(ctx, target)
@@ -130,8 +134,8 @@ func (d *Dialer) DialEarly(ctx context.Context, target string) (net.Conn, error)
 		Conn: conn, replyDeadline: time.Now().Add(replyTimeout),
 		onFailure: func() {
 			d.mu.Lock()
-			if generation == d.generation && preferred == d.preferred {
-				d.nextProbe = time.Now()
+			if d.transport == config.TransportAuto && generation == d.policy.generation && preferred == d.policy.preferred {
+				d.policy.nextProbe = time.Now()
 			}
 			d.mu.Unlock()
 		},

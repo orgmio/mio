@@ -8,11 +8,9 @@ require (
 	github.com/refraction-networking/utls v1.8.2
 	github.com/spf13/cobra v1.10.2
 	github.com/things-go/go-socks5 v0.1.4
-	golang.org/x/exp v0.0.0-20261124000051-d6646c509b6d
 	golang.org/x/net v0.63.0
+	golang.org/x/term v0.48.0
 )
-
-replace github.com/apernet/quic-go => github.com/HyNetworks/quic-go v0.65.1-0.20261109005002-2895f039137a
 
 require (
 	github.com/andybalholm/brotli v1.3.0 // indirect
@@ -22,3 +20,5 @@ require (
 	golang.org/x/crypto v0.59.0 // indirect
 	golang.org/x/sys v0.50.0 // indirect
 )
+
+replace github.com/apernet/quic-go => github.com/HyNetworks/quic-go v0.65.1-0.20261109005002-2895f039137a

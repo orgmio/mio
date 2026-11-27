@@ -70,6 +70,7 @@ type demux struct {
 	replay   *quicauth.ReplayCache
 	virtual  *virtualConn
 
+	readers sync.WaitGroup
 	mu      sync.Mutex
 	flows   map[netip.AddrPort]*flow
 	unknown int // flows 里不属于 mio 的流的数量
@@ -115,12 +116,17 @@ func (d *demux) refreshDest(ctx context.Context) {
 // run 用 recvmmsg 成批读取数据报并分流。数据报缓冲来自池：交给 QUIC 或暂存起来的缓冲由接收方归还，这里换一个新的；
 // 转发给真站的缓冲写完就能复用。
 func (d *demux) run(ctx context.Context) {
+	ctx, cancel := context.WithCancel(ctx)
+	cleanupDone := make(chan struct{})
 	go func() {
-		<-ctx.Done()
-		d.sock.Close()
-		d.virtual.Close()
+		defer close(cleanupDone)
+		d.cleanup(ctx)
 	}()
-	go d.cleanup(ctx)
+	defer func() {
+		cancel()
+		<-cleanupDone
+		d.readers.Wait()
+	}()
 	go d.refreshDest(ctx)
 
 	conn := ipv4.NewPacketConn(d.sock)
@@ -131,6 +137,11 @@ func (d *demux) run(ctx context.Context) {
 		msgs[i].Buffers = [][]byte{pkts[i].data[:]}
 		msgs[i].OOB = pkts[i].oob[:]
 	}
+	defer func() {
+		for _, p := range pkts {
+			putPacket(p)
+		}
+	}()
 	for {
 		n, err := conn.ReadBatch(msgs, 0)
 		if err != nil {
@@ -160,6 +171,10 @@ func (d *demux) run(ctx context.Context) {
 // handle 分流一个数据报，返回 true 表示 p 已被交出（进了 QUIC 队列或暂存），调用方不能再用它。
 func (d *demux) handle(addr netip.AddrPort, p *udpPacket, now time.Time) bool {
 	d.mu.Lock()
+	if d.flows == nil {
+		d.mu.Unlock()
+		return false
+	}
 	f := d.flows[addr]
 	if f == nil {
 		if d.unknown >= maxUnknownFlows {
@@ -236,7 +251,7 @@ func (d *demux) openRelay(client netip.AddrPort) *net.UDPConn {
 		slog.Warn("inbound/mio: open udp connection to dest", "err", err)
 		return nil
 	}
-	go func() {
+	d.readers.Go(func() {
 		buf := make([]byte, packetSize)
 		for {
 			n, err := relay.Read(buf)
@@ -245,7 +260,7 @@ func (d *demux) openRelay(client netip.AddrPort) *net.UDPConn {
 			}
 			d.sock.WriteToUDPAddrPort(buf[:n], client)
 		}
-	}()
+	})
 	return relay
 }
 
@@ -255,6 +270,12 @@ func (d *demux) cleanup(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
+			d.mu.Lock()
+			for _, f := range d.flows {
+				f.close()
+			}
+			d.flows = nil // 已取出的最后一批数据报也不能再创建转发连接。
+			d.mu.Unlock()
 			return
 		case <-ticker.C:
 		}
@@ -275,17 +296,21 @@ func (d *demux) cleanup(ctx context.Context) {
 			if !expired {
 				continue
 			}
-			if f.relay != nil {
-				f.relay.Close()
-			}
-			for _, q := range f.pending {
-				putPacket(q)
-			}
+			f.close()
 			if f.kind != flowMio {
 				d.unknown--
 			}
 			delete(d.flows, addr)
 		}
 		d.mu.Unlock()
+	}
+}
+
+func (f *flow) close() {
+	if f.relay != nil {
+		f.relay.Close()
+	}
+	for _, p := range f.pending {
+		putPacket(p)
 	}
 }

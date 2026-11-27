@@ -13,19 +13,39 @@ import (
 )
 
 type Config struct {
-	Log       Log      `toml:"log"`
-	Outbounds Outbound `toml:"outbounds"`
-	Inbounds  Inbound  `toml:"inbounds"`
+	Log       Log       `toml:"log"`
+	Outbounds *Outbound `toml:"outbounds"`
+	Inbounds  *Inbound  `toml:"inbounds"`
+}
+
+// Transport 指定 mio 客户端与服务端之间使用的传输。零值表示自动选路。
+type Transport string
+
+const (
+	TransportAuto Transport = ""
+	TransportTCP  Transport = "tcp"
+	TransportUDP  Transport = "udp"
+)
+
+func (t *Transport) normalize(section string) error {
+	switch *t {
+	case "auto":
+		*t = TransportAuto
+	case TransportAuto, TransportTCP, TransportUDP:
+	default:
+		return fmt.Errorf("invalid [%s].transport %q (want auto, tcp or udp)", section, *t)
+	}
+	return nil
 }
 
 // Inbound 是服务端入站：监听地址与伪装站。
 type Inbound struct {
-	Listen     string `toml:"listen"`
-	ListenPort int    `toml:"listen_port"`
-	Dest       string `toml:"dest"`
-	DestPort   int    `toml:"dest_port"` // 选填，0 表示与 ListenPort 相同
-	PrivateKey string `toml:"private_key"`
-	UDP        *bool  `toml:"udp"` // 选填，nil 表示启用 QUIC
+	Listen     string    `toml:"listen"`
+	ListenPort int       `toml:"listen_port"`
+	Dest       string    `toml:"dest"`
+	DestPort   int       `toml:"dest_port"` // 选填，0 表示与 ListenPort 相同
+	PrivateKey string    `toml:"private_key"`
+	Transport  Transport `toml:"transport"`
 }
 
 type Log struct {
@@ -37,15 +57,14 @@ type Log struct {
 
 // Outbound 是客户端出站：本地 SOCKS5 监听、mio 服务端地址与伪装站。
 type Outbound struct {
-	SocksListen     string `toml:"socks_listen"`
-	SocksListenPort int    `toml:"socks_listen_port"`
-	Socks5UDP       bool   `toml:"socks5_udp"`
-	Server          string `toml:"server"`
-	ServerPort      int    `toml:"server_port"`
-	Dest            string `toml:"dest"`
-	DestPort        int    `toml:"dest_port"` // 选填，客户端不使用，只是允许两端的配置写法一致
-	PublicKey       string `toml:"public_key"`
-	UDP             *bool  `toml:"udp"` // 选填，nil 表示启用 QUIC
+	SocksListen     string    `toml:"socks_listen"`
+	SocksListenPort int       `toml:"socks_listen_port"`
+	Socks5UDP       bool      `toml:"socks5_udp"`
+	Server          string    `toml:"server"`
+	ServerPort      int       `toml:"server_port"`
+	Dest            string    `toml:"dest"`
+	PublicKey       string    `toml:"public_key"`
+	Transport       Transport `toml:"transport"`
 }
 
 func Load(path string) (Config, error) {
@@ -59,7 +78,13 @@ func Load(path string) (Config, error) {
 	if err := toml.NewDecoder(file).DisallowUnknownFields().Decode(&cfg); err != nil {
 		var strict *toml.StrictMissingError
 		if errors.As(err, &strict) {
-			return Config{}, fmt.Errorf("decode config at %s: unknown field(s):\n%s", path, strict.String())
+			// TOML 的上下文摘录可能包含相邻的密钥，只报告字段位置和名称。
+			var fields []error
+			for _, field := range strict.Errors {
+				line, column := field.Position()
+				fields = append(fields, fmt.Errorf("%s:%d:%d: unknown field %q", path, line, column, strings.Join(field.Key(), ".")))
+			}
+			return Config{}, errors.Join(fields...)
 		}
 		return Config{}, fmt.Errorf("decode config at %s: %w", path, err)
 	}
@@ -79,10 +104,10 @@ func (l Log) SlogLevel() (slog.Level, error) {
 }
 
 // HasServer 表示配置了 [inbounds]，需要启动服务端。
-func (cfg Config) HasServer() bool { return cfg.Inbounds != (Inbound{}) }
+func (cfg Config) HasServer() bool { return cfg.Inbounds != nil }
 
 // HasClient 表示配置了 [outbounds]，需要启动客户端。
-func (cfg Config) HasClient() bool { return cfg.Outbounds != (Outbound{}) }
+func (cfg Config) HasClient() bool { return cfg.Outbounds != nil }
 
 func validPort(port int) bool { return port >= 1 && port <= 65535 }
 
@@ -106,7 +131,10 @@ func (cfg *Config) Validate() error {
 }
 
 func (cfg *Config) validateClient() error {
-	out := &cfg.Outbounds
+	out := cfg.Outbounds
+	if err := out.Transport.normalize("outbounds"); err != nil {
+		return err
+	}
 	out.SocksListen = strings.TrimSpace(out.SocksListen)
 	if out.SocksListen == "" {
 		return errors.New("configuration must set [outbounds].socks_listen")
@@ -125,9 +153,6 @@ func (cfg *Config) validateClient() error {
 	if out.Dest == "" {
 		return errors.New("configuration must set [outbounds].dest")
 	}
-	if out.DestPort != 0 && !validPort(out.DestPort) {
-		return errors.New("[outbounds].dest_port must be between 1 and 65535")
-	}
 	if out.PublicKey == "" {
 		return errors.New("configuration must set [outbounds].public_key (run `mio keygen`)")
 	}
@@ -138,7 +163,10 @@ func (cfg *Config) validateClient() error {
 }
 
 func (cfg *Config) validateServer() error {
-	in := &cfg.Inbounds
+	in := cfg.Inbounds
+	if err := in.Transport.normalize("inbounds"); err != nil {
+		return err
+	}
 	in.Listen = strings.TrimSpace(in.Listen)
 	in.Dest = strings.TrimSpace(in.Dest)
 	if in.Listen == "" {

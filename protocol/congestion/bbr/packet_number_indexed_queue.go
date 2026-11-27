@@ -128,16 +128,6 @@ func (p *packetNumberIndexedQueue[T]) IsEmpty() bool {
 	return p.numberOfPresentEntries == 0
 }
 
-// NumberOfPresentEntries 返回队列中的条目数。
-func (p *packetNumberIndexedQueue[T]) NumberOfPresentEntries() int {
-	return p.numberOfPresentEntries
-}
-
-// EntrySlotsUsed 返回底层双端队列已分配的条目数，该值与队列的内存用量成正比。
-func (p *packetNumberIndexedQueue[T]) EntrySlotsUsed() int {
-	return p.entries.Len()
-}
-
 // FirstPacket 返回队列中第一个条目的数据包编号。
 func (p *packetNumberIndexedQueue[T]) FirstPacket() (packetNumber congestion.PacketNumber) {
 	return p.firstPacket

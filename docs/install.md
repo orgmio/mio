@@ -19,12 +19,12 @@ LibC的话虽然mio不包含任何C语言代码，但是DNS解析部分仍旧需
 
 当然，对于arm指令集的平台，因为github actions的ubuntu-latest-arm半天开不出来机器，所以这里只能编译为静态文件，也就是后面没有-libc名。
 
-对于我们不支持的指令集，您也可以克隆代码并手动运行`go build`，或提交issue并邮寄机器以供我们测试。
+对于我们不支持的平台，您也可以克隆代码并手动运行`go build`，或提交issue要求支持。
 
 ## 作为服务运行
 
-相信在座的你肯定不希望每次重启机器后重启作为实时进程的mio吧，
-所以mio提供了一些官方的方式让您方便的将其作为守护进程。
+你肯定不希望每次重启机器后重启作为实时进程的mio吧，
+所以mio提供了一些方式让您方便的将其作为守护进程。
 
 ### 对于systemd系统
 
@@ -40,7 +40,7 @@ chown -R mio:mio /etc/mio/
 
 ```
 [Unit]
-Description=mio service
+Description=Service of MIO proxy
 Documentation=https://github.com/orgmio/mio/tree/main/docs
 After=network.target nss-lookup.target network-online.target
 
@@ -52,7 +52,6 @@ StateDirectory=mio
 CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW CAP_NET_BIND_SERVICE CAP_SYS_PTRACE CAP_DAC_READ_SEARCH
 AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW CAP_NET_BIND_SERVICE CAP_SYS_PTRACE CAP_DAC_READ_SEARCH
 ExecStart=/usr/bin/mio run -c /etc/mio/config.toml
-ExecReload=/bin/kill -HUP $MAINPID
 Restart=on-failure
 RestartSec=10s
 LimitNOFILE=infinity
@@ -62,6 +61,8 @@ WantedBy=multi-user.target
 ```
 
 这段systemd文件会启动一个位于`/usr/bin/mio`的二进制文件，并附带参数`run -c /etc/mio/config.toml`。
+
+修改 `/etc/mio/config.toml` 或更换密钥后，运行 `systemctl restart mio` 使新配置生效。
 
 同时不要在配置文件的`[log]`中写`output`字段，直接要日志输出给systemd是最好的解决方式。
 
@@ -157,17 +158,17 @@ update-rc.d mio defaults
 /etc/init.d/mio status
 ```
 
-修改配置后运行 `/etc/init.d/mio restart`。省略配置中 `[log]` 的 `output` 时，
-服务日志写入 `/var/log/mio.log`。
+修改配置后运行 `/etc/init.d/mio restart`。
 
-参考手册：[start-stop-daemon](https://manpages.debian.org/bookworm/dpkg/start-stop-daemon.8.en.html) 和
-[update-rc.d](https://manpages.debian.org/bookworm/init-system-helpers/update-rc.d.8.en.html)。
+服务日志默认写入 `/var/log/mio.log`。
 
 ### 对于 OpenWrt
 
-将适合路由器 CPU 架构的 Linux 静态二进制安装到 `/usr/bin/mio`，并将配置放到
-`/etc/mio/config.toml`。以下示例由 OpenWrt 的 `procd` 以 root 身份运行 mio，
-配置文件可设为仅 root 可读写。
+将适合路由器 CPU 架构的 Linux 静态二进制安装到 `/usr/bin/mio`，
+
+并将配置放到`/etc/mio/config.toml`。
+
+以下示例由 OpenWrt 的 `procd` 以 root 身份运行 mio。
 
 ```sh
 chmod 0755 /usr/bin/mio
@@ -210,6 +211,6 @@ chmod 0755 /etc/init.d/mio
 /etc/init.d/mio status
 ```
 
-修改配置后运行 `/etc/init.d/mio restart`。省略配置中 `[log]` 的 `output` 时，
-可以用 `logread -e mio` 查看服务日志。
-有关进程管理选项，参见 [OpenWrt procd 文档](https://openwrt.org/docs/guide-developer/procd-init-scripts)。
+修改配置后运行 `/etc/init.d/mio restart`。
+
+省略配置中 `[log]` 的 `output` 时，可以用 `logread -e mio` 查看服务日志。

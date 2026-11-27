@@ -1,8 +1,6 @@
 package bbr
 
-import (
-	"golang.org/x/exp/constraints"
-)
+import "cmp"
 
 // 实现 Kathleen Nichols 算法，用于跟踪固定时间区间内一系列样本的最小值（或最大值）
 // 估计值（例如过去五分钟内的最小 RTT）。算法会跟踪最佳、次佳和第三佳的最小值（或最大值）
@@ -19,28 +17,20 @@ import (
 //
 // 最后，最佳估计值过期时由次佳估计值替代，次佳估计值再由第三佳估计值替代；最新样本则成为第三佳估计值。
 
-type WindowedFilterValue interface {
-	any
-}
-
-type WindowedFilterTime interface {
-	constraints.Integer | constraints.Float
-}
-
-type WindowedFilter[V WindowedFilterValue, T WindowedFilterTime] struct {
+type WindowedFilter[V any] struct {
 	// 窗口的时间长度。
-	windowLength T
-	estimates    []entry[V, T]
+	windowLength roundTripCount
+	estimates    []entry[V]
 	comparator   func(V, V) int
 }
 
-type entry[V WindowedFilterValue, T WindowedFilterTime] struct {
+type entry[V any] struct {
 	sample V
-	time   T
+	time   roundTripCount
 }
 
 // 比较两个值；如果第一个值大于或等于第二个值，则返回 true。
-func MaxFilter[O constraints.Ordered](a, b O) int {
+func MaxFilter[O cmp.Ordered](a, b O) int {
 	if a > b {
 		return 1
 	} else if a < b {
@@ -49,43 +39,33 @@ func MaxFilter[O constraints.Ordered](a, b O) int {
 	return 0
 }
 
-// 比较两个值；如果第一个值小于或等于第二个值，则返回 true。
-func MinFilter[O constraints.Ordered](a, b O) int {
-	if a < b {
-		return 1
-	} else if a > b {
-		return -1
-	}
-	return 0
-}
-
-func NewWindowedFilter[V WindowedFilterValue, T WindowedFilterTime](windowLength T, comparator func(V, V) int) *WindowedFilter[V, T] {
-	return &WindowedFilter[V, T]{
+func NewWindowedFilter[V any](windowLength roundTripCount, comparator func(V, V) int) *WindowedFilter[V] {
+	return &WindowedFilter[V]{
 		windowLength: windowLength,
-		estimates:    make([]entry[V, T], 3, 3),
+		estimates:    make([]entry[V], 3, 3),
 		comparator:   comparator,
 	}
 }
 
 // 更改窗口长度，但不更新当前样本。
-func (f *WindowedFilter[V, T]) SetWindowLength(windowLength T) {
+func (f *WindowedFilter[V]) SetWindowLength(windowLength roundTripCount) {
 	f.windowLength = windowLength
 }
 
-func (f *WindowedFilter[V, T]) GetBest() V {
+func (f *WindowedFilter[V]) GetBest() V {
 	return f.estimates[0].sample
 }
 
-func (f *WindowedFilter[V, T]) GetSecondBest() V {
+func (f *WindowedFilter[V]) GetSecondBest() V {
 	return f.estimates[1].sample
 }
 
-func (f *WindowedFilter[V, T]) GetThirdBest() V {
+func (f *WindowedFilter[V]) GetThirdBest() V {
 	return f.estimates[2].sample
 }
 
 // 使用 |sample| 更新最佳估计值，并在必要时使过期估计值失效并更新估计值。
-func (f *WindowedFilter[V, T]) Update(newSample V, newTime T) {
+func (f *WindowedFilter[V]) Update(newSample V, newTime roundTripCount) {
 	// 如果估计值尚未初始化、新样本成为最佳值，或最新记录的估计值过旧，则重置所有估计值。
 	if f.comparator(f.estimates[0].sample, *new(V)) == 0 ||
 		f.comparator(newSample, f.estimates[0].sample) >= 0 ||
@@ -95,10 +75,10 @@ func (f *WindowedFilter[V, T]) Update(newSample V, newTime T) {
 	}
 
 	if f.comparator(newSample, f.estimates[1].sample) >= 0 {
-		f.estimates[1] = entry[V, T]{newSample, newTime}
+		f.estimates[1] = entry[V]{newSample, newTime}
 		f.estimates[2] = f.estimates[1]
 	} else if f.comparator(newSample, f.estimates[2].sample) >= 0 {
-		f.estimates[2] = entry[V, T]{newSample, newTime}
+		f.estimates[2] = entry[V]{newSample, newTime}
 	}
 
 	// 根据需要使估计值过期并更新。
@@ -106,7 +86,7 @@ func (f *WindowedFilter[V, T]) Update(newSample V, newTime T) {
 		// 最佳估计值在整个窗口期间都未更新，因此将次佳和第三佳估计值依次提升。
 		f.estimates[0] = f.estimates[1]
 		f.estimates[1] = f.estimates[2]
-		f.estimates[2] = entry[V, T]{newSample, newTime}
+		f.estimates[2] = entry[V]{newSample, newTime}
 		// 需要再迭代一次。也要检查新的最佳估计值是否已超出窗口，因为它也可能是在很久以前记录的。
 		// 无需再多迭代一次，因为方法开头已经处理了这种情况。
 		if newTime-f.estimates[0].time > f.windowLength {
@@ -118,7 +98,7 @@ func (f *WindowedFilter[V, T]) Update(newSample V, newTime T) {
 	if f.comparator(f.estimates[1].sample, f.estimates[0].sample) == 0 &&
 		newTime-f.estimates[1].time > f.windowLength/4 {
 		// 窗口的四分之一时间内没有出现更好的样本，因此从窗口的第二个四分位中选取次佳估计值。
-		f.estimates[1] = entry[V, T]{newSample, newTime}
+		f.estimates[1] = entry[V]{newSample, newTime}
 		f.estimates[2] = f.estimates[1]
 		return
 	}
@@ -126,17 +106,17 @@ func (f *WindowedFilter[V, T]) Update(newSample V, newTime T) {
 	if f.comparator(f.estimates[2].sample, f.estimates[1].sample) == 0 &&
 		newTime-f.estimates[2].time > f.windowLength/2 {
 		// 半个窗口过去仍未出现更好的估计值，因此从窗口后半段选取第三佳估计值。
-		f.estimates[2] = entry[V, T]{newSample, newTime}
+		f.estimates[2] = entry[V]{newSample, newTime}
 	}
 }
 
 // 将所有估计值重置为新样本。
-func (f *WindowedFilter[V, T]) Reset(newSample V, newTime T) {
-	f.estimates[2] = entry[V, T]{newSample, newTime}
+func (f *WindowedFilter[V]) Reset(newSample V, newTime roundTripCount) {
+	f.estimates[2] = entry[V]{newSample, newTime}
 	f.estimates[1] = f.estimates[2]
 	f.estimates[0] = f.estimates[1]
 }
 
-func (f *WindowedFilter[V, T]) Clear() {
-	f.estimates = make([]entry[V, T], 3, 3)
+func (f *WindowedFilter[V]) Clear() {
+	f.estimates = make([]entry[V], 3, 3)
 }

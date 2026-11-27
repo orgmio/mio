@@ -16,8 +16,8 @@ import (
 
 	"github.com/apernet/quic-go"
 
-	"github.com/orgmio/mio/internal/congestion"
 	"github.com/orgmio/mio/protocol"
+	"github.com/orgmio/mio/protocol/congestion"
 	"github.com/orgmio/mio/protocol/quicauth"
 )
 

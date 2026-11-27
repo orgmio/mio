@@ -44,7 +44,7 @@ func NewSOCKS5(cfg config.Outbound) (*SOCKS5Node, error) {
 		ServerPort: cfg.ServerPort,
 		Dest:       cfg.Dest,
 		PublicKey:  publicKey,
-	}, cfg.UDP == nil || *cfg.UDP)}
+	}, cfg.Transport)}
 	node.server = socks5.NewServer(
 		socks5.WithLogger(slogLogger{}),
 		socks5.WithResolver(noResolver{}),
@@ -103,20 +103,23 @@ func (node *SOCKS5Node) Start(context.Context) error {
 	return nil
 }
 
+// Close 释放监听端口并关闭出站拨号器。
+func (node *SOCKS5Node) Close() {
+	if node.listener != nil {
+		node.listener.Close()
+	}
+	node.dialer.Close()
+}
+
 // Serve 处理 Start 之后到来的 SOCKS5 连接，直到 ctx 结束。必须先调用 Start。
 func (node *SOCKS5Node) Serve(ctx context.Context) error {
 	listener := node.listener
 	if listener == nil {
 		return errors.New("socks5 node is not started")
 	}
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
-	defer node.dialer.Close()
-
-	go func() {
-		<-ctx.Done()
-		listener.Close()
-	}()
+	defer node.Close()
+	stop := context.AfterFunc(ctx, func() { listener.Close() })
+	defer stop()
 
 	if err := node.server.Serve(loggingListener{listener}); err != nil && ctx.Err() == nil {
 		return err

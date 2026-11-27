@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"slices"
 	"syscall"
 	"time"
 
@@ -20,6 +21,7 @@ import (
 type service interface {
 	Start(ctx context.Context) error
 	Serve(ctx context.Context) error
+	Close()
 }
 
 var commandRun = &cobra.Command{
@@ -59,14 +61,14 @@ func Run(configPath string) error {
 	// 配置了 [inbounds] 就启动服务端，配置了 [outbounds] 就启动客户端，两个都有则同时运行。
 	var services []service
 	if cfg.HasServer() {
-		srv, err := server.New(cfg.Inbounds)
+		srv, err := server.New(*cfg.Inbounds)
 		if err != nil {
 			return err
 		}
 		services = append(services, srv)
 	}
 	if cfg.HasClient() {
-		node, err := client.NewSOCKS5(cfg.Outbounds)
+		node, err := client.NewSOCKS5(*cfg.Outbounds)
 		if err != nil {
 			return err
 		}
@@ -76,8 +78,12 @@ func Run(configPath string) error {
 	// 任何一个退出（出错或收到信号）都会让另一个一起停下，返回最先出现的错误。
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	for _, s := range services {
+	for i, s := range services {
 		if err := s.Start(ctx); err != nil {
+			cancel()
+			for _, started := range slices.Backward(services[:i]) {
+				started.Close()
+			}
 			return err
 		}
 	}

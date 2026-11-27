@@ -7,12 +7,13 @@ import (
 	"log/slog"
 	"net"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/apernet/quic-go"
 
-	"github.com/orgmio/mio/internal/congestion"
 	"github.com/orgmio/mio/protocol"
+	"github.com/orgmio/mio/protocol/congestion"
 	"github.com/orgmio/mio/protocol/quicauth"
 )
 
@@ -35,7 +36,6 @@ func (s *Server) startQUIC(ctx context.Context) (func() error, error) {
 	}
 
 	d := newDemux(sock, s.key.PublicKey(), net.JoinHostPort(s.cfg.Dest, strconv.Itoa(s.cfg.DestPort)))
-	go d.run(ctx)
 
 	transport := &quic.Transport{Conn: d.virtual}
 	listener, err := transport.Listen(&tls.Config{
@@ -56,12 +56,30 @@ func (s *Server) startQUIC(ctx context.Context) (func() error, error) {
 	}
 	slog.Info("inbound/mio: udp server started at " + sock.LocalAddr().String())
 
+	ctx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	demuxDone := make(chan struct{})
+	go func() {
+		defer close(demuxDone)
+		d.run(ctx)
+	}()
 	go func() {
 		<-ctx.Done()
+		sock.Close()
+		d.virtual.Close()
 		listener.Close()
 		transport.Close()
+		<-demuxDone
+		close(done)
 	}()
+	s.closeQUIC = func() {
+		cancel()
+		<-done
+	}
 	return func() error {
+		var clients sync.WaitGroup
+		defer clients.Wait()
+		defer cancel()
 		for {
 			conn, err := listener.Accept(ctx)
 			if err != nil {
@@ -70,12 +88,16 @@ func (s *Server) startQUIC(ctx context.Context) (func() error, error) {
 				}
 				return err
 			}
-			go s.handleQUIC(ctx, conn)
+			clients.Go(func() { s.handleQUIC(ctx, conn) })
 		}
 	}, nil
 }
 
 func (s *Server) handleQUIC(ctx context.Context, conn *quic.Conn) {
+	ctx, cancel := context.WithCancel(ctx)
+	var streams sync.WaitGroup
+	defer streams.Wait()
+	defer cancel()
 	defer conn.CloseWithError(0, "")
 	congestion.UseBBR(conn)
 	if err := s.authQUIC(ctx, conn); err != nil {
@@ -88,7 +110,7 @@ func (s *Server) handleQUIC(ctx context.Context, conn *quic.Conn) {
 			return
 		}
 		client := protocol.NewStreamConn(stream, func() { stream.CancelRead(0) }, conn.LocalAddr(), conn.RemoteAddr())
-		go s.proxy(ctx, client)
+		streams.Go(func() { s.proxy(ctx, client) })
 	}
 }
 
