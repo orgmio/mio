@@ -1,13 +1,13 @@
 package protocol
 
 import (
-	"bytes"
 	"encoding/binary"
 	"errors"
 	"io"
 	"net"
 	"os"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/orgmio/mio/protocol/padding"
@@ -16,29 +16,36 @@ import (
 // ErrStreamReset 表示对端已放弃这条流。
 var ErrStreamReset = errors.New("stream reset by peer")
 
-const retainedStreamBuffer = 32 << 10
+var readFromPool = sync.Pool{
+	New: func() any {
+		b := make([]byte, maxWriteBatchPayload)
+		return &b
+	},
+}
 
 // stream 是会话上的一条流。
 type stream struct {
 	sess *Session
 
+	readLock  sync.Mutex // 保证 Read 与 WriteTo 按流内字节顺序消费数据
 	writeLock sync.Mutex // 让同一条流上的 Write、CloseWrite 按调用顺序发出
 
 	mu              sync.Mutex
-	id              uint32       // 流编号；客户端的流在第一次发送数据前为 0
-	buf             bytes.Buffer // 已收到、还没被读走的数据
-	recvWindow      int          // 对端还可以发送的字节数
-	unacked         int          // 已被读走、还没通过 window 帧还给对端的字节数
-	recvClosed      bool         // 对端已发来 close 帧
-	reset           bool         // 对端已发来 reset 帧
-	sendCredit      int          // 还可以向对端发送的字节数
-	sendClosed      bool         // 已发出 close 帧，或不需要再发
-	closed          bool         // 本端已调用 Close
-	sentData        uint64       // 已发出的 data 帧数
+	id              uint32     // 流编号；客户端的流在第一次发送数据前为 0
+	buf             ringBuffer // 已收到、还没被读走的数据
+	spare           ringBuffer // WriteTo 交换缓冲时复用，避免频繁进出缓冲池
+	recvWindow      int        // 对端还可以发送的字节数
+	unacked         int        // 已被读走、还没通过 window 帧还给对端的字节数
+	recvClosed      bool       // 对端已发来 close 帧
+	reset           bool       // 对端已发来 reset 帧
+	sendCredit      int        // 还可以向对端发送的字节数
+	sendClosed      bool       // 已发出 close 帧，或不需要再发
+	closed          bool       // 本端已调用 Close
+	sentData        uint64     // 已发出的 data 帧数
 	nextPadding     *padding.Range
 	readDeadline    time.Time
 	writeDeadline   time.Time
-	frameWriteLimit time.Time
+	frameWriteLimit atomic.Int64 // 当前正在写出批次的超时（UnixNano），0 表示空闲
 
 	readNotify  chan struct{}
 	writeNotify chan struct{}
@@ -143,6 +150,8 @@ func (st *stream) Read(p []byte) (int, error) {
 	if len(p) == 0 {
 		return 0, nil
 	}
+	st.readLock.Lock()
+	defer st.readLock.Unlock()
 	for {
 		st.mu.Lock()
 		if st.closed {
@@ -150,16 +159,8 @@ func (st *stream) Read(p []byte) (int, error) {
 			return 0, net.ErrClosed
 		}
 		if st.buf.Len() > 0 {
-			n, _ := st.buf.Read(p)
-			if st.buf.Len() == 0 {
-				if st.buf.Cap() > retainedStreamBuffer || st.recvClosed || st.reset {
-					st.buf = bytes.Buffer{}
-				} else {
-					st.buf.Reset()
-				}
-			} else if st.buf.Cap() > max(retainedStreamBuffer, 4*st.buf.Len()) {
-				st.buf = *bytes.NewBuffer(bytes.Clone(st.buf.Bytes()))
-			}
+			n := st.buf.Read(p)
+			st.buf.maybeShrink(st.recvClosed || st.reset)
 			// 读走的数据攒够半个窗口再还给对端，避免每次读都发一个 window 帧。
 			st.unacked += n
 			id := st.id
@@ -172,15 +173,21 @@ func (st *stream) Read(p []byte) (int, error) {
 			st.mu.Unlock()
 			st.sess.releaseReceiveCredit(n)
 			if increment > 0 {
-				st.sess.writeFrame(FrameWindow, id, binary.BigEndian.AppendUint32(nil, uint32(increment)), 0)
+				var winBuf [4]byte
+				binary.BigEndian.PutUint32(winBuf[:], uint32(increment))
+				st.sess.writeFrame(FrameWindow, id, winBuf[:], 0)
 			}
 			return n, nil
 		}
 		if st.recvClosed {
+			st.buf.release()
+			st.spare.release()
 			st.mu.Unlock()
 			return 0, io.EOF
 		}
 		if st.reset {
+			st.buf.release()
+			st.spare.release()
 			st.mu.Unlock()
 			return 0, ErrStreamReset
 		}
@@ -192,7 +199,122 @@ func (st *stream) Read(p []byte) (int, error) {
 	}
 }
 
-// Write 发送数据，对端的接收窗口用完时会等待。
+func writeAllCount(w io.Writer, p []byte) (int, error) {
+	total := 0
+	for len(p) > 0 {
+		n, err := w.Write(p)
+		total += n
+		if err != nil {
+			return total, err
+		}
+		if n == 0 {
+			return total, io.ErrShortWrite
+		}
+		p = p[n:]
+	}
+	return total, nil
+}
+
+// WriteTo 把接收缓冲中的数据直接写出到 w，省去中间拷贝与临时缓冲区分配。
+func (st *stream) WriteTo(w io.Writer) (int64, error) {
+	st.readLock.Lock()
+	defer st.readLock.Unlock()
+	var total int64
+	for {
+		st.mu.Lock()
+		if st.closed {
+			st.mu.Unlock()
+			return total, net.ErrClosed
+		}
+		if st.buf.Len() > 0 {
+			r := st.buf
+			st.buf = st.spare
+			st.spare = ringBuffer{}
+			st.mu.Unlock()
+
+			s1, s2 := r.slices()
+			nWritten, writeErr := writeAllCount(w, s1)
+			if writeErr == nil && len(s2) > 0 {
+				var n2 int
+				n2, writeErr = writeAllCount(w, s2)
+				nWritten += n2
+			}
+			total += int64(nWritten)
+			r.consume(nWritten)
+
+			st.mu.Lock()
+			if r.Len() > 0 {
+				if st.buf.Len() == 0 {
+					st.buf.release()
+					st.buf = r
+				} else {
+					var merged ringBuffer
+					merged.grow(r.Len() + st.buf.Len())
+					rs1, rs2 := r.slices()
+					bs1, bs2 := st.buf.slices()
+					merged.Write(rs1)
+					merged.Write(rs2)
+					merged.Write(bs1)
+					merged.Write(bs2)
+					r.release()
+					st.buf.release()
+					st.buf = merged
+				}
+			} else {
+				r.maybeShrink(st.recvClosed || st.reset)
+				if st.buf.Cap() == 0 {
+					st.buf = r
+				} else {
+					st.spare.release()
+					st.spare = r
+				}
+			}
+			var id uint32
+			var increment int
+			if nWritten > 0 {
+				st.unacked += nWritten
+				id = st.id
+				if st.unacked >= StreamWindow/2 && !st.recvClosed && !st.reset {
+					increment = st.unacked
+					st.unacked = 0
+					st.recvWindow += increment
+				}
+			}
+			st.mu.Unlock()
+			if nWritten > 0 {
+				st.sess.releaseReceiveCredit(nWritten)
+			}
+			if increment > 0 {
+				var winBuf [4]byte
+				binary.BigEndian.PutUint32(winBuf[:], uint32(increment))
+				st.sess.writeFrame(FrameWindow, id, winBuf[:], 0)
+			}
+			if writeErr != nil {
+				return total, writeErr
+			}
+			continue
+		}
+		if st.recvClosed {
+			st.buf.release()
+			st.spare.release()
+			st.mu.Unlock()
+			return total, nil
+		}
+		if st.reset {
+			st.buf.release()
+			st.spare.release()
+			st.mu.Unlock()
+			return total, ErrStreamReset
+		}
+		deadline := st.readDeadline
+		st.mu.Unlock()
+		if err := st.wait(st.readNotify, nil, deadline); err != nil {
+			return total, err
+		}
+	}
+}
+
+// Write 发送数据，对端的接收窗口用完时会等待。单次最多打包 maxWriteBatchFrames 个帧合并写出。
 func (st *stream) Write(p []byte) (int, error) {
 	st.writeLock.Lock()
 	defer st.writeLock.Unlock()
@@ -211,7 +333,7 @@ func (st *stream) Write(p []byte) (int, error) {
 			st.mu.Unlock()
 			return total, os.ErrDeadlineExceeded
 		}
-		n := min(len(p), st.sendCredit, MaxFramePayload)
+		n := min(len(p), st.sendCredit, maxWriteBatchPayload)
 		var creditReady <-chan struct{}
 		if n > 0 {
 			n, creditReady = st.sess.takeSendCredit(n)
@@ -224,24 +346,19 @@ func (st *stream) Write(p []byte) (int, error) {
 			}
 			continue
 		}
+		frames := uint64((n + MaxFramePayload - 1) / MaxFramePayload)
 		st.sendCredit -= n
-		dataFrames := st.sentData
-		st.sentData++
+		baseDataFrames := st.sentData
+		st.sentData += frames
 		next := st.nextPadding
 		st.nextPadding = nil
 		st.mu.Unlock()
 
-		var padLength int
-		if next != nil {
-			padLength, _ = padding.RandomInt(next.Minimum, next.Maximum)
-		} else {
-			padLength = st.sess.paddingLength(FrameData, n, dataFrames)
-		}
-		if err := st.writeData(p[:n], padLength); err != nil {
+		if err := st.writeDataBatch(p[:n], baseDataFrames, next); err != nil {
 			st.sess.addSendCredit(n)
 			st.mu.Lock()
 			st.sendCredit += n
-			st.sentData--
+			st.sentData -= frames
 			if st.nextPadding == nil {
 				st.nextPadding = next
 			}
@@ -254,10 +371,12 @@ func (st *stream) Write(p []byte) (int, error) {
 	return total, nil
 }
 
-// ReadFrom 把 r 的数据发到流上，每次最多读一个帧的负载。io.Copy 会优先使用它：
-// 这样大块数据正好一帧一条满记录，不会因为 io.Copy 的缓冲区比帧大而在每两条满记录后面留下一条固定长度的小记录。
+// ReadFrom 把 r 的数据发到流上，每次最多读 maxWriteBatchFrames 个帧的负载（对齐帧边界），并复用缓冲池减少分配和系统调用。
 func (st *stream) ReadFrom(r io.Reader) (int64, error) {
-	buf := make([]byte, MaxFramePayload)
+	bp := readFromPool.Get().(*[]byte)
+	buf := *bp
+	defer readFromPool.Put(bp)
+
 	var total int64
 	for {
 		n, err := r.Read(buf)
@@ -287,12 +406,17 @@ func (st *stream) takeWriteSlot() error {
 		if closed {
 			return net.ErrClosed
 		}
+		if !deadline.IsZero() && !time.Now().Before(deadline) {
+			return os.ErrDeadlineExceeded
+		}
+		select {
+		case st.sess.writeMu <- struct{}{}:
+			return nil
+		default:
+		}
 		var timeout <-chan time.Time
 		var timer *time.Timer
 		if !deadline.IsZero() {
-			if !time.Now().Before(deadline) {
-				return os.ErrDeadlineExceeded
-			}
 			timer = time.NewTimer(time.Until(deadline))
 			timeout = timer.C
 		}
@@ -316,15 +440,15 @@ func (st *stream) takeWriteSlot() error {
 	}
 }
 
-func (st *stream) socketWriteDeadline() time.Time {
-	if !st.writeDeadline.IsZero() && st.writeDeadline.Before(st.frameWriteLimit) {
+func (st *stream) socketWriteDeadline(limit time.Time) time.Time {
+	if !st.writeDeadline.IsZero() && st.writeDeadline.Before(limit) {
 		return st.writeDeadline
 	}
-	return st.frameWriteLimit
+	return limit
 }
 
-// writeData 在同一次持有写入锁期间分配新流编号并发送该流的首帧。
-func (st *stream) writeData(payload []byte, padLength int) error {
+// writeDataBatch 在同一次持有写入锁期间分配新流编号并批量发送该批次的 data 帧。
+func (st *stream) writeDataBatch(payload []byte, baseDataFrames uint64, firstPad *padding.Range) error {
 	sess := st.sess
 	if err := st.takeWriteSlot(); err != nil {
 		return err
@@ -336,21 +460,20 @@ func (st *stream) writeData(payload []byte, padLength int) error {
 		st.mu.Unlock()
 		return net.ErrClosed
 	}
-	if !st.writeDeadline.IsZero() && !time.Now().Before(st.writeDeadline) {
+	now := time.Now()
+	if !st.writeDeadline.IsZero() && !now.Before(st.writeDeadline) {
 		st.mu.Unlock()
 		return os.ErrDeadlineExceeded
 	}
-	st.frameWriteLimit = time.Now().Add(sessionWriteTimeout)
-	if err := sess.conn.SetWriteDeadline(st.socketWriteDeadline()); err != nil {
-		st.frameWriteLimit = time.Time{}
+	limit := now.Add(sessionWriteTimeout)
+	st.frameWriteLimit.Store(limit.UnixNano())
+	desired := st.socketWriteDeadline(limit)
+	if err := sess.ensureWriteDeadline(now, desired, !st.writeDeadline.IsZero()); err != nil {
+		st.frameWriteLimit.Store(0)
 		st.mu.Unlock()
 		return err
 	}
-	defer func() {
-		st.mu.Lock()
-		st.frameWriteLimit = time.Time{}
-		st.mu.Unlock()
-	}()
+	defer st.frameWriteLimit.Store(0)
 
 	sess.mu.Lock()
 	if sess.err != nil {
@@ -368,7 +491,7 @@ func (st *stream) writeData(payload []byte, padLength int) error {
 	sess.mu.Unlock()
 	id := st.id
 	st.mu.Unlock()
-	return sess.writeFrameLocked(FrameData, id, payload, padLength)
+	return sess.writeDataBatchLocked(id, payload, baseDataFrames, firstPad)
 }
 
 // SetNextPadding 让下一个 data 帧的填充长度在 [minimum, maximum] 内随机，只生效一次，优先于填充策略。
@@ -410,7 +533,8 @@ func (st *stream) Close() error {
 	}
 	st.closed = true
 	discarded := st.buf.Len()
-	st.buf = bytes.Buffer{}
+	st.buf.release()
+	st.spare.release()
 	// 没有编号的流对端并不知道，也就不需要通知。
 	id := st.id
 	known := id != 0
@@ -455,8 +579,9 @@ func (st *stream) SetWriteDeadline(t time.Time) error {
 	st.mu.Lock()
 	st.writeDeadline = t
 	var err error
-	if !st.frameWriteLimit.IsZero() {
-		err = st.sess.conn.SetWriteDeadline(st.socketWriteDeadline())
+	if limitNano := st.frameWriteLimit.Load(); limitNano != 0 {
+		st.sess.connWriteDeadline.Store(0)
+		err = st.sess.conn.SetWriteDeadline(st.socketWriteDeadline(time.Unix(0, limitNano)))
 	}
 	st.mu.Unlock()
 	notify(st.writeNotify)

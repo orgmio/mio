@@ -71,6 +71,9 @@ func (node *SOCKS5Node) dial(ctx context.Context, _, _ string, request *socks5.R
 		return nil, err
 	}
 	slog.Info("outbound/mio: outbound connection to " + target)
+	if !slog.Default().Enabled(context.Background(), slog.LevelDebug) {
+		return conn, nil
+	}
 	return &sniLogConn{Conn: conn, host: dest.FQDN}, nil
 }
 

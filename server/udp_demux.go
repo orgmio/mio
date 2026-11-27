@@ -59,7 +59,7 @@ type flow struct {
 	kind    flowKind
 	pending []*udpPacket
 	relay   *net.UDPConn
-	last    time.Time
+	last    atomic.Int64 // UnixNano
 }
 
 // demux 按客户端地址把 UDP 流分流：带有效标记的交给 QUIC 服务，其余原样转发给真站。
@@ -71,7 +71,7 @@ type demux struct {
 	virtual  *virtualConn
 
 	readers sync.WaitGroup
-	mu      sync.Mutex
+	mu      sync.RWMutex
 	flows   map[netip.AddrPort]*flow
 	unknown int // flows 里不属于 mio 的流的数量
 }
@@ -159,7 +159,10 @@ func (d *demux) run(ctx context.Context) {
 			p := pkts[i]
 			p.n, p.oobn, p.addr = msgs[i].N, msgs[i].NN, addr
 			ap := addr.AddrPort()
-			if d.handle(netip.AddrPortFrom(ap.Addr().Unmap(), ap.Port()), p, now) {
+			if ap.Addr().Is4In6() {
+				ap = netip.AddrPortFrom(ap.Addr().Unmap(), ap.Port())
+			}
+			if d.handle(ap, p, now) {
 				pkts[i] = getPacket()
 				msgs[i].Buffers[0] = pkts[i].data[:]
 				msgs[i].OOB = pkts[i].oob[:]
@@ -170,6 +173,30 @@ func (d *demux) run(ctx context.Context) {
 
 // handle 分流一个数据报，返回 true 表示 p 已被交出（进了 QUIC 队列或暂存），调用方不能再用它。
 func (d *demux) handle(addr netip.AddrPort, p *udpPacket, now time.Time) bool {
+	nowNano := now.UnixNano()
+
+	d.mu.RLock()
+	if d.flows == nil {
+		d.mu.RUnlock()
+		return false
+	}
+	if f := d.flows[addr]; f != nil && f.kind != flowPending {
+		f.last.Store(nowNano)
+		switch f.kind {
+		case flowMio:
+			d.mu.RUnlock()
+			return d.virtual.push(p)
+		case flowRelay:
+			relay := f.relay
+			d.mu.RUnlock()
+			if relay != nil {
+				relay.Write(p.data[:p.n])
+			}
+			return false
+		}
+	}
+	d.mu.RUnlock()
+
 	d.mu.Lock()
 	if d.flows == nil {
 		d.mu.Unlock()
@@ -185,7 +212,7 @@ func (d *demux) handle(addr netip.AddrPort, p *udpPacket, now time.Time) bool {
 		d.flows[addr] = f
 		d.unknown++
 	}
-	f.last = now
+	f.last.Store(nowNano)
 
 	switch f.kind {
 	case flowMio:
@@ -280,10 +307,11 @@ func (d *demux) cleanup(ctx context.Context) {
 		case <-ticker.C:
 		}
 		now := time.Now()
+		nowNano := now.UnixNano()
 		d.replay.Sweep(now)
 		d.mu.Lock()
 		for addr, f := range d.flows {
-			idle := now.Sub(f.last)
+			idle := time.Duration(nowNano - f.last.Load())
 			expired := false
 			switch f.kind {
 			case flowPending:

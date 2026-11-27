@@ -26,7 +26,7 @@ func closeWrite(conn net.Conn) {
 
 // relay 在客户端与真站之间转发 TLS 记录，直到客户端发来合法的认证记录，之后返回加密会话。
 func (s *Server) relay(client, dest net.Conn) (*protocol.Session, bool) {
-	clientReader := bufio.NewReader(client)
+	clientReader := bufio.NewReaderSize(client, 64<<10)
 	var serverRandom atomic.Pointer[[]byte]
 	var clientRandom, clientKeyShare []byte // 仅在客户端方向的转发协程中读写
 	var shared []byte
@@ -35,7 +35,7 @@ func (s *Server) relay(client, dest net.Conn) (*protocol.Session, bool) {
 	camouflageStopped := make(chan struct{})
 	go func() {
 		defer close(camouflageStopped)
-		err := tlsrecord.CopyRecords(client, bufio.NewReader(dest), func(header, body []byte) tlsrecord.Action {
+		err := tlsrecord.CopyRecords(client, bufio.NewReaderSize(dest, 32<<10), func(header, body []byte) tlsrecord.Action {
 			switch {
 			case header[0] == tlsrecord.TypeHandshake && len(body) >= 38 && body[0] == tlsrecord.HandshakeServerHello:
 				// 遇到 HelloRetryRequest 时会有两条 ServerHello，以最后一条为准。

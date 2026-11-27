@@ -8,6 +8,11 @@ import (
 // SessionWindow 是会话在每个方向上为所有流分配的初始数据帧总额度，以字节计。
 const SessionWindow = 32 << 20
 
+const (
+	sessionWindowThreshold = 1 << 20
+	sessionLowWater        = SessionWindow / 2
+)
+
 func (s *Session) takeSendCredit(limit int) (int, <-chan struct{}) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -46,13 +51,21 @@ func (s *Session) releaseReceiveCredit(n int) {
 	}
 	s.mu.Lock()
 	s.recvConsumed += n
+	shouldNotify := s.recvConsumed >= sessionWindowThreshold || s.recvCredit <= sessionLowWater
 	s.mu.Unlock()
-	notify(s.windowReady)
+	if shouldNotify {
+		notify(s.windowReady)
+	}
 }
 
 // 读取方无需等待共享连接上的写入操作。窗口更新会在短暂等待后批量发送，
-// 包括会话额度耗尽后少量读取所释放的额度。
+// 包括会话额度耗尽后少量读取所释放的额度；累计消费达到阈值时立即发出。
 func (s *Session) writeControlFrames() {
+	timer := time.NewTimer(time.Hour)
+	timer.Stop()
+	defer timer.Stop()
+	var winBuf [4]byte
+
 	for {
 		var err error
 		select {
@@ -61,12 +74,16 @@ func (s *Session) writeControlFrames() {
 		case id := <-s.reject:
 			err = s.writeFrame(FrameReset, id, nil, 0)
 		case <-s.windowReady:
-			timer := time.NewTimer(5 * time.Millisecond)
-			select {
-			case <-s.done:
-				timer.Stop()
-				return
-			case <-timer.C:
+			s.mu.Lock()
+			immediate := s.recvConsumed >= sessionWindowThreshold
+			s.mu.Unlock()
+			if !immediate {
+				timer.Reset(5 * time.Millisecond)
+				select {
+				case <-s.done:
+					return
+				case <-timer.C:
+				}
 			}
 			s.mu.Lock()
 			n := s.recvConsumed
@@ -74,7 +91,8 @@ func (s *Session) writeControlFrames() {
 			s.recvCredit += n
 			s.mu.Unlock()
 			if n > 0 {
-				err = s.writeFrame(FrameWindow, 0, binary.BigEndian.AppendUint32(nil, uint32(n)), 0)
+				binary.BigEndian.PutUint32(winBuf[:], uint32(n))
+				err = s.writeFrame(FrameWindow, 0, winBuf[:], 0)
 			}
 		}
 		if err != nil {

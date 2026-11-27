@@ -44,12 +44,14 @@ const (
 	maxSharePadding = 255
 )
 
-// sealRecord 把 plain 加密成一条伪装成 TLS Application Data 的记录，5 字节记录头作为附加数据。
-func sealRecord(aead cipher.AEAD, seq uint64, plain []byte) []byte {
-	header := []byte{tlsrecord.TypeAppData, 0x03, 0x03, 0, 0}
+// sealRecordInto 把 plain 加密追加到 dst，返回扩展后的切片。
+func sealRecordInto(dst []byte, aead cipher.AEAD, seq uint64, plain []byte) []byte {
+	var header [tlsrecord.HeaderSize]byte
+	header[0], header[1], header[2] = tlsrecord.TypeAppData, 0x03, 0x03
 	binary.BigEndian.PutUint16(header[3:], uint16(len(plain)+aead.Overhead()))
-	record := append([]byte(nil), header...)
-	return aead.Seal(record, nonce(aead, seq), plain, header)
+	dst = append(dst, header[:]...)
+	var nonceBuf [gcmNonceSize]byte
+	return aead.Seal(dst, seqNonce(&nonceBuf, seq), plain, header[:])
 }
 
 // authRecords 生成客户端在握手后发出的两条记录，用同一把认证密钥加密，nonce 依次为 0 和 1：
@@ -72,8 +74,14 @@ func authRecords(shared, clientRandom, serverRandom, share []byte) ([]byte, erro
 	if err != nil {
 		return nil, err
 	}
-	sharePlain := append(append([]byte{}, share...), paddingBytes...)
-	return append(sealRecord(aead, 0, authPlain), sealRecord(aead, 1, sharePlain)...), nil
+	sharePlain := make([]byte, len(share)+paddingLength)
+	copy(sharePlain, share)
+	copy(sharePlain[len(share):], paddingBytes)
+
+	total := 2*tlsrecord.HeaderSize + len(authPlain) + len(sharePlain) + 2*aead.Overhead()
+	out := make([]byte, 0, total)
+	out = sealRecordInto(out, aead, 0, authPlain)
+	return sealRecordInto(out, aead, 1, sharePlain), nil
 }
 
 // VerifyAuth 是服务端认证：用服务端私钥与客户端 ClientHello 里的 X25519 key_share 算出共享密钥，

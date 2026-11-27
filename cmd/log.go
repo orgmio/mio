@@ -1,12 +1,13 @@
 package cmd
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
 	"log/slog"
 	"os"
-	"strings"
+	"strconv"
 	"sync"
 	"time"
 
@@ -50,9 +51,13 @@ func newLogHandler(out io.Writer, level slog.Level, color bool, timestamp timest
 
 func (h *logHandler) Enabled(_ context.Context, level slog.Level) bool { return level >= h.level }
 
+var logBufPool = sync.Pool{
+	New: func() any { return bytes.NewBuffer(make([]byte, 0, 256)) },
+}
+
 func (h *logHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
 	child := *h
-	var fields strings.Builder
+	var fields bytes.Buffer
 	fields.WriteString(h.bound)
 	for _, attr := range attrs {
 		writeAttr(&fields, h.group, attr)
@@ -70,7 +75,7 @@ func (h *logHandler) WithGroup(name string) slog.Handler {
 	return &child
 }
 
-func writeAttr(line *strings.Builder, group string, attr slog.Attr) {
+func writeAttr(line *bytes.Buffer, group string, attr slog.Attr) {
 	value := attr.Value.Resolve()
 	if value.Kind() == slog.KindGroup {
 		if attr.Key != "" {
@@ -107,34 +112,60 @@ func (h *logHandler) Handle(_ context.Context, record slog.Record) error {
 	case record.Level >= slog.LevelInfo:
 		name, color = "INFO", "36"
 	}
-	if h.color {
-		name = "\x1b[" + color + "m" + name + "\x1b[0m"
+
+	line := logBufPool.Get().(*bytes.Buffer)
+	line.Reset()
+	defer logBufPool.Put(line)
+
+	writeLevel := func() {
+		if h.color {
+			line.WriteString("\x1b[")
+			line.WriteString(color)
+			line.WriteByte('m')
+			line.WriteString(name)
+			line.WriteString("\x1b[0m")
+		} else {
+			line.WriteString(name)
+		}
 	}
 
-	var line strings.Builder
 	switch h.timestamp {
 	case timestampFull:
-		line.WriteString(record.Time.Format(timestampFormat))
-		line.WriteString(" ")
-		line.WriteString(name)
-		line.WriteString(" ")
+		buf := record.Time.AppendFormat(line.AvailableBuffer(), timestampFormat)
+		line.Write(buf)
+		line.WriteByte(' ')
+		writeLevel()
+		line.WriteByte(' ')
 	case timestampNone:
-		line.WriteString(name)
-		line.WriteString(" ")
+		writeLevel()
+		line.WriteByte(' ')
 	default:
-		fmt.Fprintf(&line, "%s[%04d] ", name, int(record.Time.Sub(startTime)/time.Second))
+		writeLevel()
+		line.WriteByte('[')
+		secs := max(0, int64(record.Time.Sub(startTime)/time.Second))
+		if secs < 1000 {
+			line.WriteByte('0')
+		}
+		if secs < 100 {
+			line.WriteByte('0')
+		}
+		if secs < 10 {
+			line.WriteByte('0')
+		}
+		line.Write(strconv.AppendInt(line.AvailableBuffer(), secs, 10))
+		line.WriteString("] ")
 	}
 	line.WriteString(record.Message)
 	line.WriteString(h.bound)
 	record.Attrs(func(attr slog.Attr) bool {
-		writeAttr(&line, h.group, attr)
+		writeAttr(line, h.group, attr)
 		return true
 	})
 	line.WriteByte('\n')
 
 	h.mu.Lock()
-	defer h.mu.Unlock()
-	_, err := io.WriteString(h.out, line.String())
+	_, err := h.out.Write(line.Bytes())
+	h.mu.Unlock()
 	return err
 }
 

@@ -58,12 +58,22 @@ func (s *Server) proxy(ctx context.Context, conn net.Conn) {
 	pipe(conn, remote)
 }
 
+var copyBufPool = sync.Pool{
+	New: func() any {
+		b := make([]byte, 64<<10)
+		return &b
+	},
+}
+
 // pipe 双向拷贝；一侧正常结束时只半关闭对端，出错则两端都关闭。
 func pipe(a, b net.Conn) {
 	var wg sync.WaitGroup
 	copyHalf := func(dst, src net.Conn) {
 		defer wg.Done()
-		if _, err := io.Copy(dst, src); err != nil {
+		bp := copyBufPool.Get().(*[]byte)
+		_, err := io.CopyBuffer(dst, src, *bp)
+		copyBufPool.Put(bp)
+		if err != nil {
 			dst.Close()
 			src.Close()
 			return

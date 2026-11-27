@@ -4,6 +4,7 @@ import (
 	"net"
 	"os"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -11,7 +12,7 @@ import (
 	"golang.org/x/net/ipv4"
 )
 
-const virtualQueueLen = 1024
+const virtualQueueLen = 4096
 
 // virtualConn 是交给 quic-go 的 套接字：只读得到已被分流给 mio 的数据报，写出直接走真实的 UDP 套接字。
 //
@@ -24,9 +25,10 @@ type virtualConn struct {
 	done chan struct{}
 	once sync.Once
 
-	mu       sync.Mutex
-	deadline time.Time
-	wake     chan struct{}
+	deadlineNano atomic.Int64
+	mu           sync.Mutex
+	deadline     time.Time
+	wake         chan struct{}
 }
 
 // 少了任何一个方法，quic-go 都会悄悄退回到逐包收发、没有 GSO 的慢路径，所以在编译期确认。
@@ -53,6 +55,13 @@ func (v *virtualConn) push(p *udpPacket) bool {
 
 // next 等待下一个数据报，遵守读超时。
 func (v *virtualConn) next() (*udpPacket, error) {
+	if v.deadlineNano.Load() == 0 {
+		select {
+		case p := <-v.in:
+			return p, nil
+		default:
+		}
+	}
 	for {
 		v.mu.Lock()
 		deadline, wake := v.deadline, v.wake
@@ -155,6 +164,11 @@ func (v *virtualConn) SetDeadline(t time.Time) error { return v.SetReadDeadline(
 func (v *virtualConn) SetReadDeadline(t time.Time) error {
 	v.mu.Lock()
 	v.deadline = t
+	if t.IsZero() {
+		v.deadlineNano.Store(0)
+	} else {
+		v.deadlineNano.Store(t.UnixNano())
+	}
 	close(v.wake)
 	v.wake = make(chan struct{})
 	v.mu.Unlock()

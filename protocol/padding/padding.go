@@ -5,7 +5,7 @@ import (
 	"crypto/rand"
 	"errors"
 	"io"
-	"math/big"
+	randv2 "math/rand/v2"
 )
 
 type Range struct {
@@ -17,12 +17,7 @@ func RandomInt(minimum, maximum int) (int, error) {
 	if minimum < 0 || maximum < minimum {
 		return 0, errors.New("invalid random range")
 	}
-	span := big.NewInt(int64(maximum - minimum + 1))
-	value, err := rand.Int(rand.Reader, span)
-	if err != nil {
-		return 0, err
-	}
-	return minimum + int(value.Int64()), nil
+	return minimum + randv2.IntN(maximum-minimum+1), nil
 }
 
 func RandomBytes(length int) ([]byte, error) {

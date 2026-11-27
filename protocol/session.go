@@ -34,11 +34,12 @@ type Session struct {
 	client bool
 
 	// 发送方向：writeMu 保证记录按序号依次写出。
-	writeMu   chan struct{}
-	send      cipher.AEAD
-	sendSeq   uint64
-	sendNonce [gcmNonceSize]byte
-	writeBuf  []byte // 整条记录在这里拼好并原地加密，跨帧复用
+	writeMu           chan struct{}
+	send              cipher.AEAD
+	sendSeq           uint64
+	sendNonce         [gcmNonceSize]byte
+	writeBuf          []byte // 整条记录（或一批记录）在这里拼好并原地加密，跨帧复用
+	connWriteDeadline atomic.Int64
 
 	// 接收方向：握手阶段由握手协程使用，之后只由 readLoop 使用。
 	recv       cipher.AEAD
@@ -72,7 +73,7 @@ type Session struct {
 
 func newSession(conn net.Conn, reader *bufio.Reader, send, recv cipher.AEAD, isClient bool) *Session {
 	if reader == nil {
-		reader = bufio.NewReader(conn)
+		reader = bufio.NewReaderSize(conn, 64<<10)
 	}
 	return &Session{
 		conn:        conn,

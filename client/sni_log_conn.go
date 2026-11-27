@@ -35,26 +35,26 @@ func (c *sniLogConn) Write(p []byte) (int, error) {
 	return c.Conn.Write(p)
 }
 
-// ReadFrom 让 io.Copy 按 mio 一个帧的大小读取，理由见 protocol 包里流的 ReadFrom。
+// ReadFrom 只在首次读取时嗅探 SNI，随后直接委托给 io.Copy(c.Conn, r) 以保留底层传输的批处理和缓冲优化。
 func (c *sniLogConn) ReadFrom(r io.Reader) (int64, error) {
 	buf := make([]byte, protocol.MaxFramePayload)
 	var total int64
-	for {
-		n, err := r.Read(buf)
-		if n > 0 {
-			written, writeErr := c.Write(buf[:n])
-			total += int64(written)
-			if writeErr != nil {
-				return total, writeErr
-			}
-		}
-		if err == io.EOF {
-			return total, nil
-		}
-		if err != nil {
-			return total, err
+	n, err := r.Read(buf)
+	if n > 0 {
+		written, writeErr := c.Write(buf[:n])
+		total += int64(written)
+		if writeErr != nil {
+			return total, writeErr
 		}
 	}
+	if err == io.EOF {
+		return total, nil
+	}
+	if err != nil {
+		return total, err
+	}
+	copied, copyErr := io.Copy(c.Conn, r)
+	return total + copied, copyErr
 }
 
 func (c *sniLogConn) CloseWrite() error {

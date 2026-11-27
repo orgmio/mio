@@ -44,10 +44,10 @@ func (s *Server) startQUIC(ctx context.Context) (func() error, error) {
 		MinVersion:   tls.VersionTLS13,
 	}, &quic.Config{
 		MaxIdleTimeout:                 60 * time.Second,
-		InitialStreamReceiveWindow:     6 << 20,
-		MaxStreamReceiveWindow:         16 << 20,
-		InitialConnectionReceiveWindow: 15 << 20,
-		MaxConnectionReceiveWindow:     32 << 20,
+		InitialStreamReceiveWindow:     8 << 20,
+		MaxStreamReceiveWindow:         32 << 20,
+		InitialConnectionReceiveWindow: 16 << 20,
+		MaxConnectionReceiveWindow:     64 << 20,
 		MaxIncomingStreams:             1024,
 	})
 	if err != nil {

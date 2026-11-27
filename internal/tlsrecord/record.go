@@ -49,7 +49,8 @@ func CleanEOF(err error) bool {
 // CopyRecords 按 TLS 记录从 src 转发到 dst，每条记录交给 inspect 决定如何处置。
 // 一旦数据不像 TLS，就停止解析并原样转发剩余内容。src 正常结束时，已读到的不完整记录也会照样转发。
 func CopyRecords(dst io.Writer, src *bufio.Reader, inspect func(header, body []byte) Action) error {
-	header := make([]byte, HeaderSize)
+	buf := make([]byte, HeaderSize+MaxBody)
+	header := buf[:HeaderSize]
 	for {
 		if n, err := io.ReadFull(src, header); err != nil {
 			// 只有 src 正常结束时才转发残缺的部分；本端主动关闭 src 时（例如认证成功后）残缺记录必须丢掉，
@@ -68,8 +69,7 @@ func CopyRecords(dst io.Writer, src *bufio.Reader, inspect func(header, body []b
 		}
 		length := int(binary.BigEndian.Uint16(header[3:]))
 
-		record := make([]byte, HeaderSize+length)
-		copy(record, header)
+		record := buf[:HeaderSize+length]
 		n, err := io.ReadFull(src, record[HeaderSize:])
 		if err != nil {
 			if CleanEOF(err) {

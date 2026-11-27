@@ -30,6 +30,10 @@ const (
 	// MaxFramePayload 是一个帧的负载上限，正好填满一条最大的记录。
 	MaxFramePayload = maxRecordBody - 16 - FrameHeaderSize
 
+	// maxWriteBatchFrames 限制单次写锁内批量封装并系统调用写出的数据帧数量，兼顾吞吐与多流公平性。
+	maxWriteBatchFrames  = 4
+	maxWriteBatchPayload = maxWriteBatchFrames * MaxFramePayload
+
 	// maxRecordsPerKey 限制每个方向的 AES-GCM 调用次数，远早于序号回绕。
 	maxRecordsPerKey = 1 << 24
 
@@ -76,13 +80,33 @@ func (s *Session) writeFrame(typ byte, id uint32, payload []byte, padLength int)
 	case <-s.done:
 		return s.closeError()
 	}
-	if err := s.conn.SetWriteDeadline(time.Now().Add(sessionWriteTimeout)); err != nil {
+	now := time.Now()
+	if err := s.ensureWriteDeadline(now, now.Add(sessionWriteTimeout), false); err != nil {
 		return err
 	}
 	return s.writeFrameLocked(typ, id, payload, padLength)
 }
 
 const sessionWriteTimeout = 10 * time.Second
+
+// ensureWriteDeadline 仅在截止时间缩短或距上次设置已过半时才更新底层套接字的写入截止时间，避免每帧修改 runtime timer。
+// 调用方须持有 s.writeMu（或同时持有流的锁）。
+func (s *Session) ensureWriteDeadline(now, desired time.Time, hasStreamDeadline bool) error {
+	if !hasStreamDeadline {
+		if curNano := s.connWriteDeadline.Load(); curNano != 0 {
+			cur := time.Unix(0, curNano)
+			if !cur.Before(now.Add(sessionWriteTimeout/2)) && !desired.Before(cur) {
+				return nil
+			}
+		}
+	}
+	if err := s.conn.SetWriteDeadline(desired); err != nil {
+		s.connWriteDeadline.Store(0)
+		return err
+	}
+	s.connWriteDeadline.Store(desired.UnixNano())
+	return nil
+}
 
 // 调用 writeFrameLocked 前，须持有会话的写入锁并设置底层连接的写入截止时间。
 func (s *Session) writeFrameLocked(typ byte, id uint32, payload []byte, padLength int) error {
@@ -99,7 +123,7 @@ func (s *Session) writeFrameLocked(typ byte, id uint32, payload []byte, padLengt
 	overhead := s.send.Overhead()
 	recordSize := tlsrecord.HeaderSize + plainSize + overhead
 	if cap(s.writeBuf) < recordSize {
-		s.writeBuf = make([]byte, tlsrecord.HeaderSize+FrameHeaderSize+MaxFramePayload+overhead)
+		s.writeBuf = make([]byte, maxWriteBatchFrames*(tlsrecord.HeaderSize+FrameHeaderSize+MaxFramePayload+overhead))
 	}
 	record := s.writeBuf[:recordSize]
 	header := record[:tlsrecord.HeaderSize]
@@ -110,10 +134,64 @@ func (s *Session) writeFrameLocked(typ byte, id uint32, payload []byte, padLengt
 	binary.BigEndian.PutUint32(plain[1:5], id)
 	binary.BigEndian.PutUint16(plain[5:FrameHeaderSize], uint16(len(payload)))
 	copy(plain[FrameHeaderSize:], payload)
-	clear(plain[FrameHeaderSize+len(payload):])
+	if padLength > 0 {
+		clear(plain[FrameHeaderSize+len(payload):])
+	}
 	s.send.Seal(plain[:0], seqNonce(&s.sendNonce, s.sendSeq), plain, header)
 	s.sendSeq++
 	if err := writeAll(s.conn, record); err != nil {
+		s.closeWithError(err)
+		return err
+	}
+	return nil
+}
+
+// writeDataBatchLocked 把不超过 maxWriteBatchPayload 的数据切分成多条 data 帧，连续原地加密进 writeBuf 后一次写出。
+func (s *Session) writeDataBatchLocked(id uint32, payload []byte, baseDataFrames uint64, firstPad *padding.Range) error {
+	numFrames := (len(payload) + MaxFramePayload - 1) / MaxFramePayload
+	if s.sendSeq+uint64(numFrames) > maxRecordsPerKey {
+		s.closeWithError(errRecordLimit)
+		return errRecordLimit
+	}
+	overhead := s.send.Overhead()
+	maxRecordSize := tlsrecord.HeaderSize + FrameHeaderSize + MaxFramePayload + overhead
+	if cap(s.writeBuf) < numFrames*maxRecordSize {
+		s.writeBuf = make([]byte, maxWriteBatchFrames*maxRecordSize)
+	}
+
+	off := 0
+	for i := 0; len(payload) > 0; i++ {
+		chunkLen := min(len(payload), MaxFramePayload)
+		chunk := payload[:chunkLen]
+		payload = payload[chunkLen:]
+
+		var padLength int
+		if i == 0 && firstPad != nil {
+			padLength, _ = padding.RandomInt(firstPad.Minimum, firstPad.Maximum)
+		} else {
+			padLength = s.paddingLength(FrameData, chunkLen, baseDataFrames+uint64(i))
+		}
+		padLength = max(0, min(padLength, MaxFramePayload-chunkLen))
+		plainSize := FrameHeaderSize + chunkLen + padLength
+		recordSize := tlsrecord.HeaderSize + plainSize + overhead
+
+		record := s.writeBuf[off : off+recordSize]
+		header := record[:tlsrecord.HeaderSize]
+		header[0], header[1], header[2] = tlsrecord.TypeAppData, 0x03, 0x03
+		binary.BigEndian.PutUint16(header[3:], uint16(plainSize+overhead))
+		plain := record[tlsrecord.HeaderSize : tlsrecord.HeaderSize+plainSize]
+		plain[0] = FrameData
+		binary.BigEndian.PutUint32(plain[1:5], id)
+		binary.BigEndian.PutUint16(plain[5:FrameHeaderSize], uint16(chunkLen))
+		copy(plain[FrameHeaderSize:], chunk)
+		if padLength > 0 {
+			clear(plain[FrameHeaderSize+chunkLen:])
+		}
+		s.send.Seal(plain[:0], seqNonce(&s.sendNonce, s.sendSeq), plain, header)
+		s.sendSeq++
+		off += recordSize
+	}
+	if err := writeAll(s.conn, s.writeBuf[:off]); err != nil {
 		s.closeWithError(err)
 		return err
 	}
