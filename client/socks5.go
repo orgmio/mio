@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net"
 	"strconv"
+	"sync"
 
 	"github.com/orgmio/mio/config"
 	"github.com/orgmio/mio/protocol"
@@ -73,16 +74,6 @@ func (node *SOCKS5Node) dial(ctx context.Context, _, _ string, request *socks5.R
 	return &sniLogConn{Conn: conn, host: dest.FQDN}, nil
 }
 
-type loggingListener struct{ net.Listener }
-
-func (l loggingListener) Accept() (net.Conn, error) {
-	conn, err := l.Listener.Accept()
-	if err == nil {
-		slog.Info("inbound/socks: inbound connection from " + conn.RemoteAddr().String())
-	}
-	return conn, err
-}
-
 // Run 开始监听并处理 SOCKS5 连接，直到 ctx 结束。等同于先 Start 再 Serve。
 func (node *SOCKS5Node) Run(ctx context.Context) error {
 	if err := node.Start(ctx); err != nil {
@@ -117,12 +108,27 @@ func (node *SOCKS5Node) Serve(ctx context.Context) error {
 	if listener == nil {
 		return errors.New("socks5 node is not started")
 	}
+	var workers sync.WaitGroup
+	defer workers.Wait()
 	defer node.Close()
 	stop := context.AfterFunc(ctx, func() { listener.Close() })
 	defer stop()
 
-	if err := node.server.Serve(loggingListener{listener}); err != nil && ctx.Err() == nil {
-		return err
+	for {
+		conn, err := listener.Accept()
+		if err != nil {
+			if ctx.Err() != nil || errors.Is(err, net.ErrClosed) {
+				return nil
+			}
+			return err
+		}
+		slog.Info("inbound/socks: inbound connection from " + conn.RemoteAddr().String())
+		workers.Go(func() {
+			stop := context.AfterFunc(node.dialer.ctx, func() { conn.Close() })
+			defer stop()
+			if err := node.server.ServeConn(conn); err != nil && node.dialer.ctx.Err() == nil {
+				slog.Error("inbound/socks: server: " + err.Error())
+			}
+		})
 	}
-	return nil
 }

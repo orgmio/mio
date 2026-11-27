@@ -66,17 +66,17 @@ func quicClientConfig(ipv4 bool) *quic.Config {
 func dialQUIC(ctx context.Context, peer protocol.Peer) (_ *quicSession, err error) {
 	address := net.JoinHostPort(peer.Server, strconv.Itoa(peer.ServerPort))
 	started := time.Now()
-	stage := "resolve"
+
 	slog.InfoContext(ctx, "outbound/mio: QUIC (UDP) dialing", "peer", address)
 	defer func() {
 		if err == nil {
 			return
 		}
 		if errors.Is(ctx.Err(), context.Canceled) {
-			slog.InfoContext(ctx, "outbound/mio: QUIC dial canceled", "peer", address, "stage", stage, "elapsed", time.Since(started))
+			slog.InfoContext(ctx, "outbound/mio: QUIC dial canceled", "peer", address, "elapsed", time.Since(started))
 			return
 		}
-		slog.WarnContext(ctx, "outbound/mio: QUIC dial failed", "peer", address, "stage", stage, "elapsed", time.Since(started), "err", err)
+		slog.WarnContext(ctx, "outbound/mio: QUIC dial failed", "peer", address, "elapsed", time.Since(started), "err", err)
 	}()
 	dialCtx, cancel := context.WithTimeout(ctx, quicDialTimeout)
 	defer cancel()
@@ -87,19 +87,38 @@ func dialQUIC(ctx context.Context, peer protocol.Peer) (_ *quicSession, err erro
 	if len(addrs) == 0 {
 		return nil, errors.New("no IP address for QUIC peer")
 	}
-	ip := addrs[0]
-	for _, candidate := range addrs {
+	// 首选第一个 IPv4，其他地址按解析顺序回退。
+	for i, candidate := range addrs {
 		if candidate.IP.To4() != nil {
-			ip = candidate
+			copy(addrs[1:i+1], addrs[:i])
+			addrs[0] = candidate
 			break
 		}
 	}
+	deadline, _ := dialCtx.Deadline()
+	var failures error
+	for i, ip := range addrs {
+		if err := dialCtx.Err(); err != nil {
+			return nil, errors.Join(failures, err)
+		}
+		// 每次只占用剩余预算的一份，避免无响应的地址耗尽整个拨号时限。
+		attempt, stop := context.WithTimeout(dialCtx, time.Until(deadline)/time.Duration(len(addrs)-i))
+		session, err := dialQUICAddress(attempt, peer, ip)
+		stop()
+		if err == nil {
+			return session, nil
+		}
+		failures = errors.Join(failures, fmt.Errorf("%s: %w", ip.String(), err))
+	}
+	return nil, failures
+}
+
+func dialQUICAddress(ctx context.Context, peer protocol.Peer, ip net.IPAddr) (*quicSession, error) {
 	addr := &net.UDPAddr{IP: ip.IP, Port: peer.ServerPort, Zone: ip.Zone}
 	network := "udp6"
 	if ip.IP.To4() != nil {
 		network = "udp4"
 	}
-	stage = "setup"
 	udp, err := net.ListenUDP(network, nil)
 	if err != nil {
 		return nil, err
@@ -119,16 +138,14 @@ func dialQUIC(ctx context.Context, peer protocol.Peer) (_ *quicSession, err erro
 		InsecureSkipVerify: true,
 		Rand:               quicauth.NewRand(marker),
 	}
-	stage = "handshake"
-	conn, err := transport.Dial(dialCtx, addr, tlsConf, quicClientConfig(addr.IP.To4() != nil))
+	conn, err := transport.Dial(ctx, addr, tlsConf, quicClientConfig(addr.IP.To4() != nil))
 	if err != nil {
 		transport.Close()
 		udp.Close()
 		return nil, fmt.Errorf("quic handshake: %w", err)
 	}
 
-	stage = "authentication"
-	slog.InfoContext(ctx, "outbound/mio: QUIC handshake complete, starting mio authentication", "peer", address, "elapsed", time.Since(started))
+	slog.InfoContext(ctx, "outbound/mio: QUIC handshake complete, starting mio authentication", "peer", addr.String())
 	congestion.UseBBR(conn)
 	session := &quicSession{conn: conn, transport: transport, udp: udp}
 	if err := session.authenticate(ctx, peer.PublicKey); err != nil {
@@ -136,7 +153,7 @@ func dialQUIC(ctx context.Context, peer protocol.Peer) (_ *quicSession, err erro
 		return nil, fmt.Errorf("quic auth failed (wrong public key, or incompatible with local mio protocol %s): %w", protocol.Version, err)
 	}
 	context.AfterFunc(conn.Context(), session.Close)
-	slog.InfoContext(ctx, "outbound/mio: QUIC mio session ready", "peer", address, "elapsed", time.Since(started))
+	slog.InfoContext(ctx, "outbound/mio: QUIC mio session ready", "peer", addr.String())
 	return session, nil
 }
 

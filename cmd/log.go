@@ -40,6 +40,8 @@ type logHandler struct {
 	level     slog.Level
 	color     bool
 	timestamp timestampMode
+	bound     string
+	group     string
 }
 
 func newLogHandler(out io.Writer, level slog.Level, color bool, timestamp timestampMode) *logHandler {
@@ -48,9 +50,50 @@ func newLogHandler(out io.Writer, level slog.Level, color bool, timestamp timest
 
 func (h *logHandler) Enabled(_ context.Context, level slog.Level) bool { return level >= h.level }
 
-func (h *logHandler) WithAttrs([]slog.Attr) slog.Handler { return h }
+func (h *logHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
+	child := *h
+	var fields strings.Builder
+	fields.WriteString(h.bound)
+	for _, attr := range attrs {
+		writeAttr(&fields, h.group, attr)
+	}
+	child.bound = fields.String()
+	return &child
+}
 
-func (h *logHandler) WithGroup(string) slog.Handler { return h }
+func (h *logHandler) WithGroup(name string) slog.Handler {
+	if name == "" {
+		return h
+	}
+	child := *h
+	child.group += name + "."
+	return &child
+}
+
+func writeAttr(line *strings.Builder, group string, attr slog.Attr) {
+	value := attr.Value.Resolve()
+	if value.Kind() == slog.KindGroup {
+		if attr.Key != "" {
+			group += attr.Key + "."
+		}
+		for _, member := range value.Group() {
+			writeAttr(line, group, member)
+		}
+		return
+	}
+	if attr.Key == "" && value.Equal(slog.Value{}) {
+		return
+	}
+	if group == "" && attr.Key == "err" {
+		line.WriteString(": ")
+	} else {
+		line.WriteByte(' ')
+		line.WriteString(group)
+		line.WriteString(attr.Key)
+		line.WriteByte('=')
+	}
+	line.WriteString(value.String())
+}
 
 func (h *logHandler) Handle(_ context.Context, record slog.Record) error {
 	name, color := "DEBUG", "37"
@@ -82,16 +125,9 @@ func (h *logHandler) Handle(_ context.Context, record slog.Record) error {
 		fmt.Fprintf(&line, "%s[%04d] ", name, int(record.Time.Sub(startTime)/time.Second))
 	}
 	line.WriteString(record.Message)
+	line.WriteString(h.bound)
 	record.Attrs(func(attr slog.Attr) bool {
-		if attr.Key == "err" {
-			line.WriteString(": ")
-			line.WriteString(attr.Value.String())
-		} else {
-			line.WriteString(" ")
-			line.WriteString(attr.Key)
-			line.WriteString("=")
-			line.WriteString(attr.Value.String())
-		}
+		writeAttr(&line, h.group, attr)
 		return true
 	})
 	line.WriteByte('\n')
